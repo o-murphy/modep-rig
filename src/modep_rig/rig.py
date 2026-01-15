@@ -1,0 +1,294 @@
+from typing import SupportsIndex
+
+from dataclasses import dataclass, field
+
+from modep_rig.config import Config, PluginConfig
+from modep_rig.client import Client
+
+# =============================================================================
+# Data classes
+# =============================================================================
+
+
+__all__ = ["Port", "PluginInfo", "Slot", "HardwareSlot", "Rig"]
+
+
+@dataclass
+class Port:
+    symbol: str
+    name: str
+    graph_path: str
+
+
+@dataclass
+class PluginInfo:
+    uri: str
+    label: str
+    name: str
+    inputs: list[Port] = field(default_factory=list)
+    outputs: list[Port] = field(default_factory=list)
+
+
+# =============================================================================
+# Slots
+# =============================================================================
+
+
+class Slot:
+    """Слот для плагіна в ланцюгу ефектів"""
+
+    def __init__(self, rig: "Rig", slot_id: int):
+        self.rig = rig
+        self.id = slot_id
+        self.plugin: PluginInfo | None = None
+
+    @property
+    def inputs(self) -> list[str]:
+        if self.plugin:
+            return [p.graph_path for p in self.plugin.inputs]
+        return []
+
+    @property
+    def outputs(self) -> list[str]:
+        if self.plugin:
+            return [p.graph_path for p in self.plugin.outputs]
+        return []
+
+    @property
+    def is_empty(self) -> bool:
+        return self.plugin is None
+
+    def load(self, uri: str, x: int = 500, y: int = 400) -> PluginInfo:
+        """Завантажує плагін в слот (без reconnect)"""
+        self._unload_internal()
+
+        base_label = self._label_from_uri(uri)
+        label = f"{base_label}_{self.id}"
+
+        result = self.rig.client.effect_add(label, uri, x * (self.id + 1), y)
+
+        if not result or not isinstance(result, dict) or not result.get("valid"):
+            raise Exception(f"Failed to load plugin: {uri}")
+
+        audio = result.get("ports", {}).get("audio", {})
+
+        inputs = [
+            Port(
+                symbol=p["symbol"], name=p["name"], graph_path=f"{label}/{p['symbol']}"
+            )
+            for p in audio.get("input", [])
+        ]
+
+        outputs = [
+            Port(
+                symbol=p["symbol"], name=p["name"], graph_path=f"{label}/{p['symbol']}"
+            )
+            for p in audio.get("output", [])
+        ]
+
+        self.plugin = PluginInfo(
+            uri=uri,
+            label=label,
+            name=result.get("name", base_label),
+            inputs=inputs,
+            outputs=outputs,
+        )
+
+        return self.plugin
+
+    def load_by_name(self, name: str, x: int = 500, y: int = 400) -> PluginInfo:
+        """Завантажує плагін за ім'ям з конфігурації"""
+        plugin_config = self.rig.config.get_plugin_by_name(name)
+        if not plugin_config:
+            raise ValueError(f"Plugin '{name}' not found in config")
+        return self.load(plugin_config.uri, x, y)
+
+    def unload(self):
+        """Вивантажує плагін і запускає reconnect"""
+        self._unload_internal()
+        self.rig.reconnect()
+
+    def _unload_internal(self):
+        """Вивантажує плагін БЕЗ reconnect"""
+        if self.plugin:
+            self.rig.client.effect_remove(self.plugin.label)
+            self.plugin = None
+
+    @staticmethod
+    def _label_from_uri(uri: str) -> str:
+        return uri.rstrip("/").split("/")[-1]
+
+    def __repr__(self):
+        if self.plugin:
+            return f"Slot({self.id}, {self.plugin.label})"
+        return f"Slot({self.id}, empty)"
+
+
+class HardwareSlot(Slot):
+    """Hardware I/O слот (capture/playback)"""
+
+    def __init__(self, rig: "Rig", slot_id: int, ports: list[str], is_input: bool):
+        super().__init__(rig, slot_id)
+        self._ports = ports
+        self._is_input = is_input
+
+    @property
+    def inputs(self) -> list[str]:
+        return []
+
+    @property
+    def outputs(self) -> list[str]:
+        return self._ports if self._is_input else []
+
+    @property
+    def hw_inputs(self) -> list[str]:
+        """Входи для hardware output slot (playback_1, playback_2)"""
+        return self._ports if not self._is_input else []
+
+    @property
+    def is_empty(self) -> bool:
+        return False
+
+    def load(self, uri: str, x: int = 100, y: int = 200):
+        raise NotImplementedError("Cannot load plugin into hardware slot")
+
+    def load_by_name(self, name: str, x: int = 100, y: int = 200):
+        raise NotImplementedError("Cannot load plugin into hardware slot")
+
+    def _unload_internal(self):
+        pass
+
+    def __repr__(self):
+        kind = "Input" if self._is_input else "Output"
+        return f"HardwareSlot({self.id}, {kind}, ports={self._ports})"
+
+
+# =============================================================================
+# Rig
+# =============================================================================
+
+
+class Rig:
+    """
+    Rig — ланцюг ефектів: Input -> [Slot 0] -> [Slot 1] -> ... -> Output
+    """
+
+    def __init__(self, config: Config, client: Client = None):
+        self.config = config
+        self.client = client or Client(config.server.url)
+
+        self.input_slot = HardwareSlot(
+            self, -1, ports=config.hardware.inputs, is_input=True
+        )
+
+        self.output_slot = HardwareSlot(
+            self,
+            config.rig.slot_count,
+            ports=config.hardware.outputs,
+            is_input=False,
+        )
+
+        self.slots: list[Slot] = [Slot(self, i) for i in range(config.rig.slot_count)]
+
+        self.reconnect()
+
+    def __setitem__(self, key: SupportsIndex, value: str | PluginConfig | None) -> None:
+        """
+        rig[0] = "http://..."           — завантажити плагін за URI
+        rig[0] = "DS1"                  — завантажити плагін за ім'ям з конфігу
+        rig[0] = plugin_config          — завантажити плагін з PluginConfig
+        rig[0] = None                   — очистити слот
+        """
+        if value is None:
+            self.slots[key]._unload_internal()
+        elif isinstance(value, PluginConfig):
+            self.slots[key].load(value.uri)
+        elif value.startswith("http://") or value.startswith("https://"):
+            self.slots[key].load(value)
+        else:
+            # Припускаємо, що це ім'я плагіна
+            self.slots[key].load_by_name(value)
+        self.reconnect()
+
+    def __getitem__(self, key: SupportsIndex) -> Slot:
+        return self.slots[key]
+
+    def __len__(self) -> int:
+        return len(self.slots)
+
+    def reconnect(self):
+        """Перебудовує всі з'єднання в ланцюгу"""
+        print("\n=== RECONNECT ===")
+
+        chain: list[Slot] = [self.input_slot]
+        for slot in self.slots:
+            if not slot.is_empty:
+                chain.append(slot)
+        chain.append(self.output_slot)
+
+        print(f"Active chain: {' -> '.join(repr(s) for s in chain)}")
+
+        self._disconnect_everything()
+
+        for i in range(len(chain) - 1):
+            src = chain[i]
+            dst = chain[i + 1]
+            self._connect_pair(src, dst)
+
+        print("=== RECONNECT DONE ===\n")
+
+    def _connect_pair(self, src: Slot, dst: Slot):
+        """З'єднує src -> dst"""
+        outputs = src.outputs
+
+        if isinstance(dst, HardwareSlot):
+            inputs = dst.hw_inputs
+        else:
+            inputs = dst.inputs
+
+        print(f"  Connecting {outputs} -> {inputs}")
+
+        for out in outputs:
+            for inp in inputs:
+                self.client.effect_connect(out, inp)
+
+    def _disconnect_everything(self):
+        """Відключає всі можливі з'єднання"""
+        all_outputs = list(self.input_slot.outputs)
+        all_inputs = list(self.output_slot.hw_inputs)
+
+        for slot in self.slots:
+            all_outputs.extend(slot.outputs)
+            all_inputs.extend(slot.inputs)
+
+        for out in all_outputs:
+            for inp in all_inputs:
+                try:
+                    self.client.effect_disconnect(out, inp)
+                except Exception:
+                    pass
+
+    def clear(self):
+        """Очищає всі слоти"""
+        for slot in self.slots:
+            slot._unload_internal()
+        self.reconnect()
+
+    def list_available_plugins(self) -> list[PluginConfig]:
+        """Повертає список плагінів з конфігурації"""
+        return self.config.plugins
+
+    def list_categories(self) -> list[str]:
+        """Повертає список категорій"""
+        return self.config.list_categories()
+
+    def get_plugins_by_category(self, category: str) -> list[PluginConfig]:
+        """Повертає плагіни певної категорії"""
+        return self.config.get_plugins_by_category(category)
+
+    def __repr__(self):
+        slots_str = ", ".join(
+            f"{i}:{s.plugin.name if s.plugin else 'empty'}"
+            for i, s in enumerate(self.slots)
+        )
+        return f"Rig([{slots_str}])"
