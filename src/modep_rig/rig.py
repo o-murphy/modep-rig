@@ -1,32 +1,11 @@
 from typing import SupportsIndex
 
-from dataclasses import dataclass, field
-
 from modep_rig.config import Config, PluginConfig
 from modep_rig.client import Client
-
-# =============================================================================
-# Data classes
-# =============================================================================
+from modep_rig.plugin import Plugin, Port
 
 
-__all__ = ["Port", "PluginInfo", "Slot", "HardwareSlot", "Rig"]
-
-
-@dataclass
-class Port:
-    symbol: str
-    name: str
-    graph_path: str
-
-
-@dataclass
-class PluginInfo:
-    uri: str
-    label: str
-    name: str
-    inputs: list[Port] = field(default_factory=list)
-    outputs: list[Port] = field(default_factory=list)
+__all__ = ["Slot", "HardwareSlot", "Rig"]
 
 
 # =============================================================================
@@ -40,7 +19,7 @@ class Slot:
     def __init__(self, rig: "Rig", slot_id: int):
         self.rig = rig
         self.id = slot_id
-        self.plugin: PluginInfo | None = None
+        self.plugin: Plugin | None = None
 
     @property
     def inputs(self) -> list[str]:
@@ -58,7 +37,7 @@ class Slot:
     def is_empty(self) -> bool:
         return self.plugin is None
 
-    def load(self, uri: str, x: int = 500, y: int = 400) -> PluginInfo:
+    def load(self, uri: str, x: int = 500, y: int = 400) -> Plugin:
         """Завантажує плагін в слот (без reconnect)"""
         self._unload_internal()
 
@@ -86,7 +65,8 @@ class Slot:
             for p in audio.get("output", [])
         ]
 
-        self.plugin = PluginInfo(
+        self.plugin = Plugin(
+            slot=self,
             uri=uri,
             label=label,
             name=result.get("name", base_label),
@@ -94,9 +74,14 @@ class Slot:
             outputs=outputs,
         )
 
+        # Load control metadata
+        effect_data = self.rig.client.effect_get(uri)
+        if effect_data:
+            self.plugin._load_controls(effect_data)
+
         return self.plugin
 
-    def load_by_name(self, name: str, x: int = 500, y: int = 400) -> PluginInfo:
+    def load_by_name(self, name: str, x: int = 500, y: int = 400) -> Plugin:
         """Завантажує плагін за ім'ям з конфігурації"""
         plugin_config = self.rig.config.get_plugin_by_name(name)
         if not plugin_config:

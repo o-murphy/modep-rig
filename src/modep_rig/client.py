@@ -41,7 +41,21 @@ class Client:
             print(f"    params: {kwargs}")
 
         resp = requests.get(url, params=kwargs, headers=HEADERS)
+        return self._parse_response(resp)
 
+    def _post(self, path: str, payload: str):
+        """POST request with text/plain payload."""
+        url = self.base_url + path
+        print(f"POST {url}")
+        print(f"    payload: {payload}")
+
+        resp = requests.post(
+            url, data=payload, headers={**HEADERS, "Content-Type": "text/plain"}
+        )
+        return self._parse_response(resp)
+
+    def _parse_response(self, resp: requests.Response):
+        """Parse response from GET or POST request."""
         if resp.status_code >= 400:
             print(f"    ERROR: HTTP {resp.status_code}")
             return None
@@ -106,14 +120,15 @@ class Client:
         return result is True
 
     def effect_bypass(self, label: str, bypass: bool) -> bool:
-        """Увімкнути/вимкнути bypass для ефекту"""
+        """Увімкнути/вимкнути bypass для ефекту (через :bypass параметр)"""
         value = 1 if bypass else 0
-        result = self._request(f"/effect/bypass//graph/{label}/{value}")
-        return result is True
+        return self.effect_parameter_set(label, ":bypass", value)
 
-    def effect_parameter_set(self, label: str, symbol: str, value: float):
+    def effect_parameter_set(self, label: str, symbol: str, value: float) -> bool:
         """Встановити значення параметра ефекту"""
-        return self._request(f"/effect/parameter/set//graph/{label}/{symbol}/{value}")
+        payload = f"/graph/{label}/{symbol}/{value}"
+        result = self._post("/effect/parameter/set/", payload)
+        return result is True
 
     def effect_parameter_get(self, label: str, symbol: str):
         """Отримати значення параметра ефекту"""

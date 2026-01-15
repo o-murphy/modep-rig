@@ -1,7 +1,7 @@
 # config.toml
 
 [server]
-url = "http://127.0.0.1:18181"
+url = "http://192.168.88.247"
 
 [hardware]
 inputs = ["capture_1", "capture_2"]
@@ -10,7 +10,12 @@ outputs = ["playback_1", "playback_2"]
 [rig]
 slot_count = 4
 
-# Плагіни та їх пресети для швидкого доступу
+# =============================================================================
+# Plugins
+# =============================================================================
+
+# --- Distortion / Overdrive (original) ---
+
 [[plugins]]
 name = "DS1"
 uri = "http://moddevices.com/plugins/mod-devel/DS1"
@@ -38,8 +43,10 @@ category = "distortion"
 
 [[plugins]]
 name = "GxTubeScreamer"
-uri = "http://guitarix.sourceforge.net/plugins/gx_ts9_#_ts9_"
-category = "overdrive"
+uri = "http://guitarix.sourceforge.net/plugins/gxts9#ts9sim"
+category = "distortion"
+
+# --- Reverb (original) ---
 
 [[plugins]]
 name = "Calf Reverb"
@@ -51,7 +58,131 @@ name = "Dragonfly Hall Reverb"
 uri = "https://github.com/michaelwillis/dragonfly-reverb"
 category = "reverb"
 
+# --- Delay (original) ---
+
 [[plugins]]
 name = "MDA Delay"
 uri = "http://moddevices.com/plugins/mda/Delay"
 category = "delay"
+
+# =============================================================================
+# Plugins (from server)
+# =============================================================================
+
+# --- Simulators / Amps ---
+
+[[plugins]]
+name = "Neural Amp Modeler"
+uri = "http://github.com/mikeoliphant/neural-amp-modeler-lv2"
+category = "simulator"
+
+[[plugins]]
+name = "GxAmplifier-X"
+uri = "http://guitarix.sourceforge.net/plugins/gx_amp#GUITARIX"
+category = "simulator"
+
+[[plugins]]
+name = "GxCabinet"
+uri = "http://guitarix.sourceforge.net/plugins/gx_cabinet#CABINET"
+category = "simulator"
+
+[[plugins]]
+name = "GxAlembic"
+uri = "http://guitarix.sourceforge.net/plugins/gx_studiopre#studiopre"
+category = "simulator"
+
+# --- Distortion (server) ---
+
+[[plugins]]
+name = "GxFuzz"
+uri = "http://guitarix.sourceforge.net/plugins/gx_fuzz_#fuzz_"
+category = "distortion"
+
+# --- Delay (server) ---
+
+[[plugins]]
+name = "Bollie Delay"
+uri = "https://ca9.eu/lv2/bolliedelay"
+category = "delay"
+
+[[plugins]]
+name = "Gxduck_delay"
+uri = "http://guitarix.sourceforge.net/plugins/gx_duck_delay_#_duck_delay_"
+category = "delay"
+
+# --- Modulation ---
+
+[[plugins]]
+name = "GxFlanger"
+uri = "http://guitarix.sourceforge.net/plugins/gx_flanger#_flanger"
+category = "modulator"
+
+# --- Pitch / Spectral ---
+
+[[plugins]]
+name = "Drop"
+uri = "http://moddevices.com/plugins/mod-devel/Drop"
+category = "spectral"
+
+[[plugins]]
+name = "Gxdetune"
+uri = "http://guitarix.sourceforge.net/plugins/gx_detune_#_detune_"
+category = "spectral"
+
+[[plugins]]
+name = "Pitchotto"
+uri = "https://github.com/ninodewit/SHIRO-Plugins/plugins/pitchotto"
+category = "spectral"
+
+# --- Dynamics ---
+
+[[plugins]]
+name = "Noise Gate"
+uri = "http://moddevices.com/plugins/mod-devel/System-NoiseGate"
+category = "dynamics"
+
+[[plugins]]
+name = "C* Compress"
+uri = "http://moddevices.com/plugins/caps/Compress"
+category = "dynamics"
+
+# --- Spatial ---
+
+[[plugins]]
+name = "C* Wider"
+uri = "http://moddevices.com/plugins/caps/Wider"
+category = "spatial"
+
+# --- Utility ---
+
+[[plugins]]
+name = "Gain 2x2"
+uri = "http://moddevices.com/plugins/mod-devel/Gain2x2"
+category = "utility"
+
+[[plugins]]
+name = "Instrument Tuner"
+uri = "http://gareus.org/oss/lv2/tuna#mod"
+category = "utility"
+
+[[plugins]]
+name = "Record-Mono"
+uri = "https://github.com/brummer10/screcord#mono_record"
+category = "utility"
+
+[[plugins]]
+name = "Record-Stereo"
+uri = "https://github.com/brummer10/screcord#stereo_record"
+category = "utility"
+
+# --- Generators / Synths ---
+
+[[plugins]]
+name = "amsynth"
+uri = "http://code.google.com/p/amsynth/amsynth"
+category = "generator"
+
+[[plugins]]
+name = "C* CEO"
+uri = "http://moddevices.com/plugins/caps/CEO"
+category = "generator"
