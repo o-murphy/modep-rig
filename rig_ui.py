@@ -615,6 +615,12 @@ class MainWindow(QMainWindow):
         # Re-select current slot to refresh controls panel
         self._select_slot(self.selected_slot)
 
+    def closeEvent(self, event):
+        """Викликається, коли користувач закриває вікно."""
+        print("Closing rig connection...")
+        self._on_clear_all()  # Явно викликаємо очищення
+        event.accept()
+
 
 def main():
     # Load config
