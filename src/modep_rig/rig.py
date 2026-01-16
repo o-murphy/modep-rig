@@ -1,8 +1,14 @@
-from typing import SupportsIndex
+from typing import Callable, SupportsIndex
 
 from modep_rig.config import Config, PluginConfig
 from modep_rig.client import Client
 from modep_rig.plugin import Plugin, Port
+
+
+# Type aliases for callbacks
+OnParamChangeCallback = Callable[[str, str, float], None]  # label, symbol, value
+OnBypassChangeCallback = Callable[[str, bool], None]  # label, bypassed
+OnStructuralChangeCallback = Callable[[str, str], None]  # msg_type, raw_message
 
 
 __all__ = ["Slot", "HardwareSlot", "Rig"]
@@ -221,8 +227,76 @@ class Rig:
 
         self.slots: list[Slot] = [Slot(self, i) for i in range(config.rig.slot_count)]
 
+        # External callbacks (for UI)
+        self._ext_on_param_change: OnParamChangeCallback | None = None
+        self._ext_on_bypass_change: OnBypassChangeCallback | None = None
+        self._ext_on_structural_change: OnStructuralChangeCallback | None = None
+
+        # Setup WebSocket callbacks
+        self.client.ws.set_callbacks(
+            on_param_change=self._on_param_change,
+            on_bypass_change=self._on_bypass_change,
+            on_structural_change=self._on_structural_change,
+        )
+
         self.client.reset()
         self.reconnect()
+
+    def set_callbacks(
+        self,
+        on_param_change: OnParamChangeCallback | None = None,
+        on_bypass_change: OnBypassChangeCallback | None = None,
+        on_structural_change: OnStructuralChangeCallback | None = None,
+    ):
+        """Set external callbacks for UI updates.
+
+        Args:
+            on_param_change: Called when parameter changes (label, symbol, value)
+            on_bypass_change: Called when bypass changes (label, bypassed)
+            on_structural_change: Called when structure changes (msg_type, raw_message)
+        """
+        self._ext_on_param_change = on_param_change
+        self._ext_on_bypass_change = on_bypass_change
+        self._ext_on_structural_change = on_structural_change
+
+    # =========================================================================
+    # WebSocket event handlers
+    # =========================================================================
+
+    def _find_plugin_by_label(self, label: str) -> Plugin | None:
+        """Find plugin by its label across all slots."""
+        for slot in self.slots:
+            if slot.plugin and slot.plugin.label == label:
+                return slot.plugin
+        return None
+
+    def _on_param_change(self, label: str, symbol: str, value: float):
+        """Handle parameter change from WebSocket (update local state)."""
+        plugin = self._find_plugin_by_label(label)
+        if plugin and symbol in plugin.controls:
+            # Update local value without sending back to API
+            plugin.controls._controls[symbol].value = value
+            # Notify external listener (UI)
+            if self._ext_on_param_change:
+                self._ext_on_param_change(label, symbol, value)
+
+    def _on_bypass_change(self, label: str, bypassed: bool):
+        """Handle bypass change from WebSocket."""
+        plugin = self._find_plugin_by_label(label)
+        if plugin:
+            # Store bypass state on plugin
+            plugin._bypassed = bypassed
+            # Notify external listener (UI)
+            if self._ext_on_bypass_change:
+                self._ext_on_bypass_change(label, bypassed)
+
+    def _on_structural_change(self, msg_type: str, raw_message: str):
+        """Handle structural change - reset and rebuild rig."""
+        print(f"⚠️ Structural change detected: {msg_type} - {raw_message}")
+        print("   External change to MOD-UI. Rig state may be out of sync.")
+        # Notify external listener (UI)
+        if self._ext_on_structural_change:
+            self._ext_on_structural_change(msg_type, raw_message)
 
     def __del__(self):
         self.client.reset()
@@ -372,6 +446,100 @@ class Rig:
     def get_plugins_by_category(self, category: str) -> list[PluginConfig]:
         """Повертає плагіни певної категорії"""
         return self.config.get_plugins_by_category(category)
+
+    # =========================================================================
+    # State Management (Presets)
+    # =========================================================================
+
+    def get_state(self) -> dict:
+        """Get current rig state as a serializable dict.
+
+        Returns:
+            dict with structure:
+            {
+                "slots": [
+                    {"uri": "http://...", "controls": {"Dist": 0.5, ...}, "bypassed": False},
+                    None,  # empty slot
+                    ...
+                ]
+            }
+        """
+        slots_state = []
+        for slot in self.slots:
+            if slot.plugin:
+                slots_state.append({
+                    "uri": slot.plugin.uri,
+                    "controls": slot.plugin.get_state(),
+                    "bypassed": getattr(slot.plugin, "_bypassed", False),
+                })
+            else:
+                slots_state.append(None)
+
+        return {"slots": slots_state}
+
+    def set_state(self, state: dict):
+        """Restore rig state from a saved dict.
+
+        Args:
+            state: dict from get_state()
+        """
+        slots_state = state.get("slots", [])
+
+        # First, clear all slots without reconnect
+        for slot in self.slots:
+            slot._unload_internal()
+
+        # Load plugins into slots
+        for i, slot_state in enumerate(slots_state):
+            if i >= len(self.slots):
+                break
+
+            if slot_state is None:
+                continue
+
+            uri = slot_state.get("uri")
+            if not uri:
+                continue
+
+            try:
+                self.slots[i].load(uri)
+                # Restore control values
+                controls = slot_state.get("controls", {})
+                if controls and self.slots[i].plugin:
+                    self.slots[i].plugin.set_state(controls)
+                # Restore bypass
+                bypassed = slot_state.get("bypassed", False)
+                if bypassed and self.slots[i].plugin:
+                    self.slots[i].plugin.bypass(True)
+            except Exception as e:
+                print(f"Failed to restore slot {i}: {e}")
+
+        # Reconnect all
+        self.reconnect()
+
+    def save_preset(self, filepath: str):
+        """Save current rig state to a JSON file.
+
+        Args:
+            filepath: Path to save the preset file
+        """
+        import json
+        state = self.get_state()
+        with open(filepath, "w") as f:
+            json.dump(state, f, indent=2)
+        print(f"Preset saved to {filepath}")
+
+    def load_preset(self, filepath: str):
+        """Load rig state from a JSON file.
+
+        Args:
+            filepath: Path to the preset file
+        """
+        import json
+        with open(filepath, "r") as f:
+            state = json.load(f)
+        self.set_state(state)
+        print(f"Preset loaded from {filepath}")
 
     def __repr__(self):
         slots_str = ", ".join(

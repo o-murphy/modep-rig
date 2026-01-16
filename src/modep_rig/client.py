@@ -1,9 +1,10 @@
-import requests
+import time
+import threading
+from typing import Callable
 from urllib.parse import unquote, urlparse
 
-import time
+import requests
 import websocket
-import threading
 
 __all__ = ["Client"]
 
@@ -12,6 +13,22 @@ HEADERS = {
     "Accept": "application/json, text/plain, */*",
     "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0",
 }
+
+# WebSocket message types that indicate structural changes (require rig reset)
+STRUCTURAL_MESSAGES = frozenset([
+    "add",           # Plugin added
+    "remove",        # Plugin removed
+    "connect",       # Connection made
+    "disconnect",    # Connection removed
+    "load",          # Pedalboard loaded
+    "reset",         # System reset
+])
+
+# Messages to ignore (stats, system info)
+IGNORE_MESSAGES = frozenset([
+    "stats",
+    "sys_stats",
+])
 
 
 class WsClient:
@@ -22,11 +39,79 @@ class WsClient:
         self.ws = None
         self._should_reconnect = True
 
+        # Callbacks
+        self._on_param_change: Callable[[str, str, float], None] | None = None
+        self._on_bypass_change: Callable[[str, bool], None] | None = None
+        self._on_structural_change: Callable[[str, str], None] | None = None
+
+    def set_callbacks(
+        self,
+        on_param_change: Callable[[str, str, float], None] | None = None,
+        on_bypass_change: Callable[[str, bool], None] | None = None,
+        on_structural_change: Callable[[str, str], None] | None = None,
+    ):
+        """Set callbacks for WebSocket events.
+
+        Args:
+            on_param_change: Called when parameter changes (label, symbol, value)
+            on_bypass_change: Called when bypass changes (label, bypassed)
+            on_structural_change: Called when structure changes - plugins/connections (msg_type, raw_message)
+        """
+        self._on_param_change = on_param_change
+        self._on_bypass_change = on_bypass_change
+        self._on_structural_change = on_structural_change
+
     def on_open(self, ws):
         print(f"Підключено до WebSocket: {self.ws_url}")
 
-    def on_message(self, ws, message):
-        print(f"WS Повідомлення від сервера: {message}")
+    def on_message(self, ws, message: str):
+        """Parse and dispatch WebSocket messages."""
+        parts = message.split()
+        if not parts:
+            return
+
+        msg_type = parts[0]
+
+        # Ignore stats messages
+        if msg_type in IGNORE_MESSAGES:
+            return
+
+        print(f"WS << {message}")
+
+        # Structural changes - plugins, connections, pedalboard
+        if msg_type in STRUCTURAL_MESSAGES:
+            if self._on_structural_change:
+                self._on_structural_change(msg_type, message)
+            return
+
+        # Parameter change: param_set /graph/label symbol value
+        if msg_type == "param_set" and len(parts) >= 4:
+            # Format: param_set /graph/autowah_1 freq 0.261719
+            graph_path = parts[1]  # /graph/autowah_1
+            symbol = parts[2]       # freq
+            try:
+                value = float(parts[3])
+            except ValueError:
+                return
+
+            # Parse label from path: /graph/label -> label
+            if graph_path.startswith("/graph/"):
+                label = graph_path[7:]  # Remove "/graph/"
+
+                # Check if it's bypass
+                if symbol == ":bypass":
+                    if self._on_bypass_change:
+                        self._on_bypass_change(label, value > 0.5)
+                else:
+                    if self._on_param_change:
+                        self._on_param_change(label, symbol, value)
+            return
+
+        # Output parameter (for future use)
+        if msg_type == "output" and len(parts) >= 4:
+            # output /graph/label symbol value
+            # TODO: implement output parameter handling
+            pass
 
     def on_error(self, ws, error):
         print(f"WS Помилка: {error}")

@@ -32,9 +32,16 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QDialogButtonBox,
 )
-from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtCore import Qt, Signal, QTimer, QObject
 
 from modep_rig import Config, Rig, ControlPort
+
+
+class RigSignals(QObject):
+    """Qt signals for Rig WebSocket events."""
+    param_changed = Signal(str, str, float)  # label, symbol, value
+    bypass_changed = Signal(str, bool)  # label, bypassed
+    structural_changed = Signal(str, str)  # msg_type, raw_message
 
 
 class ControlWidget(QWidget):
@@ -465,6 +472,19 @@ class MainWindow(QMainWindow):
         self.rig = rig
         self.selected_slot = 0
 
+        # Setup signals for thread-safe UI updates
+        self.rig_signals = RigSignals()
+        self.rig_signals.param_changed.connect(self._on_ws_param_changed)
+        self.rig_signals.bypass_changed.connect(self._on_ws_bypass_changed)
+        self.rig_signals.structural_changed.connect(self._on_ws_structural_changed)
+
+        # Connect rig callbacks to emit signals
+        self.rig.set_callbacks(
+            on_param_change=lambda label, sym, val: self.rig_signals.param_changed.emit(label, sym, val),
+            on_bypass_change=lambda label, bp: self.rig_signals.bypass_changed.emit(label, bp),
+            on_structural_change=lambda typ, msg: self.rig_signals.structural_changed.emit(typ, msg),
+        )
+
         self.setWindowTitle("MODEP Rig Controller")
         self.setMinimumSize(800, 600)
 
@@ -546,6 +566,38 @@ class MainWindow(QMainWindow):
         """Clear all slots."""
         self.rig.clear()
         self._refresh_slots()
+        self._select_slot(self.selected_slot)
+
+    # =========================================================================
+    # WebSocket event handlers (thread-safe via Qt signals)
+    # =========================================================================
+
+    def _on_ws_param_changed(self, label: str, symbol: str, value: float):
+        """Handle parameter change from WebSocket - update UI."""
+        # Find which slot has this plugin
+        for i, slot in enumerate(self.rig.slots):
+            if slot.plugin and slot.plugin.label == label:
+                # If this is the selected slot, update control widget
+                if i == self.selected_slot and symbol in self.controls_panel.control_widgets:
+                    widget = self.controls_panel.control_widgets[symbol]
+                    widget.set_value_silent(value)
+                break
+
+    def _on_ws_bypass_changed(self, label: str, bypassed: bool):
+        """Handle bypass change from WebSocket - update UI."""
+        # Find which slot has this plugin
+        for slot in self.rig.slots:
+            if slot.plugin and slot.plugin.label == label:
+                # TODO: Update bypass checkbox if visible
+                print(f"🔇 UI: {label} bypass: {bypassed}")
+                break
+
+    def _on_ws_structural_changed(self, msg_type: str, _raw_message: str):
+        """Handle structural change from WebSocket - refresh UI."""
+        print(f"⚠️ UI: Structural change: {msg_type}")
+        # Refresh slots display - structure may have changed externally
+        self._refresh_slots()
+        # Re-select current slot to refresh controls panel
         self._select_slot(self.selected_slot)
 
 
