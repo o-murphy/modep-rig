@@ -24,6 +24,8 @@ class PluginConfig:
     # Опціональні override для портів (для моно/стерео конверсії)
     inputs: list[str] | None = None
     outputs: list[str] | None = None
+    # Явний режим каналів: "mono", "stereo", або None (авто)
+    mode: str | None = None
 
 
 @dataclass
@@ -73,6 +75,7 @@ class Config:
                 category=p.get("category", ""),
                 inputs=p.get("inputs"),
                 outputs=p.get("outputs"),
+                mode=p.get("mode"),
             ))
 
         return cls(

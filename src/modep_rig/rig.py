@@ -37,6 +37,25 @@ class Slot:
     def is_empty(self) -> bool:
         return self.plugin is None
 
+    @property
+    def is_stereo(self) -> bool:
+        """Визначає чи слот працює в стерео режимі.
+
+        Пріоритет:
+        1. Явний mode в конфізі плагіна
+        2. Кількість портів (2+ = stereo)
+        """
+        if not self.plugin:
+            return False
+
+        # Перевіряємо конфіг плагіна
+        plugin_config = self.rig.config.get_plugin_by_uri(self.plugin.uri)
+        if plugin_config and plugin_config.mode:
+            return plugin_config.mode == "stereo"
+
+        # Автовизначення по кількості портів
+        return len(self.plugin.outputs) >= 2
+
     def load(self, uri: str, x: int = 500, y: int = 400) -> Plugin:
         """Завантажує плагін в слот (без reconnect)"""
         # Перевіряємо чи плагін підтримується
@@ -153,6 +172,11 @@ class HardwareSlot(Slot):
         return self._ports if not self._is_input else []
 
     @property
+    def is_stereo(self) -> bool:
+        """Hardware є стерео якщо має 2+ порти"""
+        return len(self._ports) >= 2
+
+    @property
     def is_empty(self) -> bool:
         return False
 
@@ -249,7 +273,19 @@ class Rig:
         print("=== RECONNECT DONE ===\n")
 
     def _connect_pair(self, src: Slot, dst: Slot):
-        """З'єднує src -> dst"""
+        """З'єднує src -> dst попарно по індексах.
+
+        Логіка:
+        - Порти з'єднуються по індексу: out[0]->in[0], out[1]->in[1]
+        - Якщо виходів більше ніж входів: зайві виходи йдуть на останній вхід
+        - Якщо входів більше ніж виходів: останній вихід дублюється на всі зайві входи
+
+        Це дозволяє:
+        - mono->mono: out[0]->in[0]
+        - mono->stereo: out[0]->in[0], out[0]->in[1]
+        - stereo->mono: out[0]->in[0], out[1]->in[0]
+        - stereo->stereo: out[0]->in[0], out[1]->in[1]
+        """
         outputs = src.outputs
 
         if isinstance(dst, HardwareSlot):
@@ -257,11 +293,28 @@ class Rig:
         else:
             inputs = dst.inputs
 
-        print(f"  Connecting {outputs} -> {inputs}")
+        if not outputs or not inputs:
+            print(f"  No connections (outputs={outputs}, inputs={inputs})")
+            return
 
-        for out in outputs:
-            for inp in inputs:
-                self.client.effect_connect(out, inp)
+        connections = []
+
+        # З'єднуємо кожен вихід з відповідним входом (або останнім якщо входів менше)
+        for i, out in enumerate(outputs):
+            in_idx = min(i, len(inputs) - 1)
+            inp = inputs[in_idx]
+            connections.append((out, inp))
+
+        # Якщо входів більше ніж виходів - дублюємо останній вихід
+        if len(inputs) > len(outputs):
+            last_out = outputs[-1]
+            for inp in inputs[len(outputs):]:
+                connections.append((last_out, inp))
+
+        print(f"  Connecting: {connections}")
+
+        for out_path, in_path in connections:
+            self.client.effect_connect(out_path, in_path)
 
     def _disconnect_everything(self):
         """Відключає всі можливі з'єднання"""

@@ -16,7 +16,36 @@ if TYPE_CHECKING:
     from modep_rig.rig import Slot
 
 
-__all__ = ["Port", "Plugin"]
+__all__ = ["Port", "Plugin", "ChannelType"]
+
+
+class ChannelType:
+    """Channel type constants."""
+    LEFT = "left"
+    RIGHT = "right"
+    MONO = "mono"
+
+
+def _detect_channel(symbol: str) -> str:
+    """Визначає канал порту за його символом.
+
+    Повертає: "left", "right", або "mono"
+    """
+    symbol_lower = symbol.lower()
+
+    # Патерни для лівого каналу
+    left_patterns = ["_l", "_1", "_left", "left", "_L", "in_l", "out_l"]
+    for pattern in left_patterns:
+        if pattern.lower() in symbol_lower or symbol_lower.endswith(pattern.lower()):
+            return ChannelType.LEFT
+
+    # Патерни для правого каналу
+    right_patterns = ["_r", "_2", "_right", "right", "_R", "in_r", "out_r"]
+    for pattern in right_patterns:
+        if pattern.lower() in symbol_lower or symbol_lower.endswith(pattern.lower()):
+            return ChannelType.RIGHT
+
+    return ChannelType.MONO
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +55,11 @@ class Port:
     symbol: str
     name: str
     graph_path: str
+
+    @property
+    def channel(self) -> str:
+        """Визначає канал порту: left, right, або mono."""
+        return _detect_channel(self.symbol)
 
 
 class ControlsProxy:
