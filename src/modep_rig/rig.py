@@ -1,3 +1,4 @@
+from functools import wraps
 from typing import Callable, SupportsIndex
 
 from modep_rig.config import Config, PluginConfig
@@ -9,6 +10,18 @@ from modep_rig.plugin import Plugin, Port
 OnParamChangeCallback = Callable[[str, str, float], None]  # label, symbol, value
 OnBypassChangeCallback = Callable[[str, bool], None]  # label, bypassed
 OnStructuralChangeCallback = Callable[[str, str], None]  # msg_type, raw_message
+
+
+def suppress_structural(method):
+    """Decorator to suppress structural change callbacks during method execution."""
+    @wraps(method)
+    def wrapper(self: "Rig", *args, **kwargs):
+        self.client.ws.suppress_structural(True)
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            self.client.ws.suppress_structural(False)
+    return wrapper
 
 
 __all__ = ["Slot", "HardwareSlot", "Rig"]
@@ -239,8 +252,13 @@ class Rig:
             on_structural_change=self._on_structural_change,
         )
 
-        self.client.reset()
-        self.reconnect()
+        # Initial setup - suppress structural callbacks
+        self.client.ws.suppress_structural(True)
+        try:
+            self.client.reset()
+            self.reconnect()
+        finally:
+            self.client.ws.suppress_structural(False)
 
     def set_callbacks(
         self,
@@ -301,6 +319,7 @@ class Rig:
     def __del__(self):
         self.client.reset()
 
+    @suppress_structural
     def __setitem__(self, key: SupportsIndex, value: str | PluginConfig | None) -> None:
         """
         rig[0] = "http://..."           — завантажити плагін за URI
@@ -429,6 +448,7 @@ class Rig:
                 except Exception:
                     pass
 
+    @suppress_structural
     def clear(self):
         """Очищає всі слоти"""
         for slot in self.slots:
@@ -477,6 +497,7 @@ class Rig:
 
         return {"slots": slots_state}
 
+    @suppress_structural
     def set_state(self, state: dict):
         """Restore rig state from a saved dict.
 

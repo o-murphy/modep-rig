@@ -46,6 +46,10 @@ class WsClient:
         self._on_bypass_change: Callable[[str, bool], None] | None = None
         self._on_structural_change: Callable[[str, str], None] | None = None
 
+        # Suppress mechanism - ignore messages we initiated ourselves
+        self._suppress_structural = False
+        self._suppress_params: set[tuple[str, str]] = set()  # (label, symbol) pairs to ignore
+
     def set_callbacks(
         self,
         on_param_change: Callable[[str, str, float], None] | None = None,
@@ -63,6 +67,14 @@ class WsClient:
         self._on_bypass_change = on_bypass_change
         self._on_structural_change = on_structural_change
 
+    def suppress_structural(self, suppress: bool = True):
+        """Suppress structural change callbacks (use during self-initiated changes)."""
+        self._suppress_structural = suppress
+
+    def suppress_param(self, label: str, symbol: str):
+        """Add a parameter to suppress list (will be auto-removed on first match)."""
+        self._suppress_params.add((label, symbol))
+
     def on_open(self, ws):
         print(f"Підключено до WebSocket: {self.ws_url}")
 
@@ -78,10 +90,12 @@ class WsClient:
         if msg_type in IGNORE_MESSAGES:
             return
 
-        print(f"WS << {message}")
-
         # Structural changes - plugins, connections, pedalboard
         if msg_type in STRUCTURAL_MESSAGES:
+            if self._suppress_structural:
+                print(f"WS << {message} (suppressed)")
+                return
+            print(f"WS << {message}")
             if self._on_structural_change:
                 self._on_structural_change(msg_type, message)
             return
@@ -100,6 +114,15 @@ class WsClient:
             if graph_path.startswith("/graph/"):
                 label = graph_path[7:]  # Remove "/graph/"
 
+                # Check if this param is suppressed (self-initiated)
+                key = (label, symbol)
+                if key in self._suppress_params:
+                    self._suppress_params.discard(key)
+                    print(f"WS << {message} (suppressed)")
+                    return
+
+                print(f"WS << {message}")
+
                 # Check if it's bypass
                 if symbol == ":bypass":
                     if self._on_bypass_change:
@@ -114,6 +137,9 @@ class WsClient:
             # output /graph/label symbol value
             # TODO: implement output parameter handling
             pass
+
+        # Log unknown messages
+        print(f"WS << {message}")
 
     def on_error(self, ws, error):
         print(f"WS Помилка: {error}")
@@ -152,15 +178,20 @@ class WsClient:
             self.ws.close()
 
     def effect_parameter_set(self, label: str, symbol: str, value):
+        """Send parameter change via WebSocket."""
         # Перевірка наявності сокета та активності з'єднання
         if self.ws and self.ws.sock and self.ws.sock.connected:
+            # Suppress the echo response for this parameter
+            self.suppress_param(label, symbol)
             command = f"param_set /graph/{label}/{symbol} {value}"
             try:
-                print("DEBUG:", command)
+                print(f"WS >> {command}")
                 self.ws.send(command)
                 return True
             except Exception as e:
                 print(f"⚠️ Помилка відправки: {e}")
+                # Remove from suppress if send failed
+                self._suppress_params.discard((label, symbol))
         return False
 
     def effect_bypass(self, label: str, bypass: bool):
