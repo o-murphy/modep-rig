@@ -275,7 +275,7 @@ class Rig:
     def _connect_pair(self, src: Slot, dst: Slot):
         """З'єднує src -> dst попарно по індексах.
 
-        Логіка:
+        Логіка по дефолту:
         - Порти з'єднуються по індексу: out[0]->in[0], out[1]->in[1]
         - Якщо виходів більше ніж входів: зайві виходи йдуть на останній вхід
         - Якщо входів більше ніж виходів: останній вихід дублюється на всі зайві входи
@@ -285,6 +285,10 @@ class Rig:
         - mono->stereo: out[0]->in[0], out[0]->in[1]
         - stereo->mono: out[0]->in[0], out[1]->in[0]
         - stereo->stereo: out[0]->in[0], out[1]->in[1]
+
+        Join режим (all-to-all):
+        - join_outputs на src: всі виходи з'єднуються з усіма входами
+        - join_inputs на dst: всі виходи з'єднуються з усіма входами
         """
         outputs = src.outputs
 
@@ -297,19 +301,38 @@ class Rig:
             print(f"  No connections (outputs={outputs}, inputs={inputs})")
             return
 
+        # Перевіряємо join флаги
+        src_config = None
+        dst_config = None
+        if src.plugin:
+            src_config = self.config.get_plugin_by_uri(src.plugin.uri)
+        if dst.plugin:
+            dst_config = self.config.get_plugin_by_uri(dst.plugin.uri)
+
+        join_outputs = src_config.join_outputs if src_config else False
+        join_inputs = dst_config.join_inputs if dst_config else False
+        use_join = join_outputs or join_inputs
+
         connections = []
 
-        # З'єднуємо кожен вихід з відповідним входом (або останнім якщо входів менше)
-        for i, out in enumerate(outputs):
-            in_idx = min(i, len(inputs) - 1)
-            inp = inputs[in_idx]
-            connections.append((out, inp))
+        if use_join:
+            # All-to-all: кожен вихід з'єднується з кожним входом
+            for out in outputs:
+                for inp in inputs:
+                    connections.append((out, inp))
+        else:
+            # Стандартна логіка: попарно по індексах
+            # З'єднуємо кожен вихід з відповідним входом (або останнім якщо входів менше)
+            for i, out in enumerate(outputs):
+                in_idx = min(i, len(inputs) - 1)
+                inp = inputs[in_idx]
+                connections.append((out, inp))
 
-        # Якщо входів більше ніж виходів - дублюємо останній вихід
-        if len(inputs) > len(outputs):
-            last_out = outputs[-1]
-            for inp in inputs[len(outputs):]:
-                connections.append((last_out, inp))
+            # Якщо входів більше ніж виходів - дублюємо останній вихід
+            if len(inputs) > len(outputs):
+                last_out = outputs[-1]
+                for inp in inputs[len(outputs):]:
+                    connections.append((last_out, inp))
 
         print(f"  Connecting: {connections}")
 

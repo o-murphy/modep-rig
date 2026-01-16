@@ -26,6 +26,9 @@ class PluginConfig:
     outputs: list[str] | None = None
     # Явний режим каналів: "mono", "stereo", або None (авто)
     mode: str | None = None
+    # All-to-all routing: з'єднати всі входи/виходи між собою
+    join_inputs: bool = False
+    join_outputs: bool = False
 
 
 @dataclass
@@ -76,6 +79,8 @@ class Config:
                 inputs=p.get("inputs"),
                 outputs=p.get("outputs"),
                 mode=p.get("mode"),
+                join_inputs=p.get("join_inputs", False),
+                join_outputs=p.get("join_outputs", False),
             ))
 
         return cls(

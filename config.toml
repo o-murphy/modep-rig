@@ -212,6 +212,7 @@ category = "spatial"
 # NOTE: use it to override inputs
 # inputs = ["lv2_audio_in_1"]
 # outputs = ["lv2_audio_out_1"]
+# join_inputs = true
 
 [[plugins]]
 name = "Auto-wah"
@@ -237,6 +238,7 @@ category = "reverb"
 name = "Triple chorus"
 uri = "http://drobilla.net/plugins/fomp/triple_chorus"
 category = "modulator"
+join_outputs = true
 [[plugins]]
 name = "setBfree DSP Tonewheel Organ"
 uri = "http://gareus.org/oss/lv2/b_synth"

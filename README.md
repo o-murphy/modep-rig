@@ -24,8 +24,8 @@ Create `config.toml`:
 url = "http://127.0.0.1:18181/"
 
 [hardware]
-inputs = ["capture_1"]      # Hardware inputs (from audio interface)
-outputs = ["playback_1"]    # Hardware outputs (to audio interface)
+inputs = ["capture_1", "capture_2"]   # Hardware inputs (from audio interface)
+outputs = ["playback_1", "playback_2"] # Hardware outputs (to audio interface)
 
 [rig]
 slot_count = 4              # Number of effect slots in chain
@@ -51,6 +51,34 @@ Use `inputs` and `outputs` arrays to override which ports are used for routing.
 This is useful for:
 - Using stereo/quad plugins in mono chain
 - Selecting specific channels from multi-channel plugins
+
+### Audio Routing
+
+Rig automatically connects plugins in a chain: `Input -> [Slot 0] -> [Slot 1] -> ... -> Output`
+
+Default routing logic (index-based pairing):
+- `mono -> mono`: `out[0] -> in[0]`
+- `mono -> stereo`: `out[0] -> in[0], out[0] -> in[1]`
+- `stereo -> mono`: `out[0] -> in[0], out[1] -> in[0]`
+- `stereo -> stereo`: `out[0] -> in[0], out[1] -> in[1]`
+
+When there are more outputs than inputs, extra outputs connect to the last available input.
+When there are more inputs than outputs, the last output is duplicated to remaining inputs.
+
+### Join Mode (All-to-All Routing)
+
+For plugins that need all outputs connected to all inputs (e.g., mixers, splitters), use `join_inputs` or `join_outputs`:
+
+```toml
+[[plugins]]
+name = "Triple chorus"
+uri = "http://drobilla.net/plugins/fomp/triple_chorus"
+category = "modulator"
+join_outputs = true  # All outputs connect to all inputs of next plugin
+```
+
+- `join_outputs = true` on source plugin: all its outputs connect to all inputs of the next plugin
+- `join_inputs = true` on destination plugin: all outputs from previous plugin connect to all its inputs
 
 ## Usage
 
