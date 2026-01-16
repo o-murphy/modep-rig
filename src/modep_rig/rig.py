@@ -103,7 +103,11 @@ class Slot:
 
     @staticmethod
     def _label_from_uri(uri: str) -> str:
-        return uri.rstrip("/").split("/")[-1]
+        # Видаляємо fragment (#...) і беремо останню частину шляху
+        path = uri.split("#")[0].rstrip("/")
+        label = path.split("/")[-1]
+        # Замінюємо недопустимі символи
+        return label.replace("#", "_").replace(" ", "_")
 
     def __repr__(self):
         if self.plugin:
