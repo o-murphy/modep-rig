@@ -34,10 +34,18 @@ IGNORE_MESSAGES = frozenset([
 class WsClient:
     def __init__(self, base_url: str):
         parsed = urlparse(base_url)
+        is_secure = parsed.scheme == "https"
+        scheme = "wss" if is_secure else "ws"
         hostname = parsed.hostname if parsed.hostname else parsed.path.split(':')[0]
         # Use same port as REST API (default 80 if not specified)
-        port = parsed.port if parsed.port else 80
-        self.ws_url = f"ws://{hostname}:{port}/websocket"
+
+        if parsed.port:
+            port = parsed.port
+        else:
+            port = 443 if is_secure else 18181
+
+        self.ws_url = f"{scheme}://{hostname}:{port}/websocket"
+        print("WS:", self.ws_url)
         self.ws = None
         self._should_reconnect = True
 

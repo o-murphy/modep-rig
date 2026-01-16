@@ -245,7 +245,7 @@ def create_control_widget(control: ControlPort, parent=None) -> ControlWidget:
 class PluginSelectorDialog(QDialog):
     """Dialog to select a plugin from available effects."""
 
-    def __init__(self, effects_list: list, parent=None):
+    def __init__(self, rig: Rig, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Select Plugin")
         self.setMinimumSize(400, 500)
@@ -258,13 +258,23 @@ class PluginSelectorDialog(QDialog):
 
         # Plugin list
         self.list_widget = QListWidget()
-        for effect in effects_list:
-            name = effect.get("name", "Unknown")
-            uri = effect.get("uri", "")
-            category = effect.get("category", [])
-            cat_str = ", ".join(category) if category else "Uncategorized"
+        # for effect in effects_list:
+        #     name = effect.get("name", "Unknown")
+        #     uri = effect.get("uri", "")
+        #     category = effect.get("category", [])
+        #     cat_str = ", ".join(category) if category else "Uncategorized"
 
-            item = QListWidgetItem(f"{name}\n  [{cat_str}]")
+        #     item = QListWidgetItem(f"{name}\n  [{cat_str}]")
+        #     item.setData(Qt.UserRole, uri)
+        #     self.list_widget.addItem(item)
+
+        # Фільтруємо: показуємо тільки ті плагіни, які є в config.toml
+        for p_config in rig.config.plugins:
+            name = p_config.name
+            uri = p_config.uri
+            category = p_config.category or "General"
+
+            item = QListWidgetItem(f"{name}\n  [{category}]")
             item.setData(Qt.UserRole, uri)
             self.list_widget.addItem(item)
 
@@ -564,7 +574,7 @@ class MainWindow(QMainWindow):
 
     def _on_load_requested(self, slot_id: int):
         """Show plugin selector and load selected plugin."""
-        dialog = PluginSelectorDialog(self.rig.client.effects_list, self)
+        dialog = PluginSelectorDialog(self.rig, self)
         if dialog.exec() == QDialog.Accepted and dialog.selected_uri:
             self.rig[slot_id] = dialog.selected_uri
             self._refresh_slots()
