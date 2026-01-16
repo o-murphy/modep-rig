@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QPushButton,
     QLabel,
+    QDial,
     QSlider,
     QComboBox,
     QCheckBox,
@@ -78,12 +79,15 @@ class KnobControl(ControlWidget):
         self.label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.label)
 
-        # Slider
-        self.slider = QSlider(Qt.Horizontal)
-        self.slider.setRange(0, self.SLIDER_STEPS)
-        self.slider.setValue(self._value_to_slider(control.value))
-        self.slider.valueChanged.connect(self._on_slider_changed)
-        layout.addWidget(self.slider)
+        # Dial
+        self.dial = QDial()
+        self.dial.setNotchesVisible(True)
+        self.dial.setNotchTarget(100.0)
+        self.dial.setWrapping(False)
+        self.dial.setRange(0, self.SLIDER_STEPS)
+        self.dial.setValue(self._value_to_slider(control.value))
+        self.dial.valueChanged.connect(self._on_slider_changed)
+        layout.addWidget(self.dial)
 
         # Value display
         self.value_label = QLabel(control.format_value())
@@ -108,7 +112,7 @@ class KnobControl(ControlWidget):
 
     def _set_widget_value(self, value: float):
         self.control.value = value
-        self.slider.setValue(self._value_to_slider(value))
+        self.dial.setValue(self._value_to_slider(value))
         self.value_label.setText(self.control.format_value())
 
 
@@ -196,7 +200,9 @@ class IntegerControl(ControlWidget):
         layout.addWidget(self.label)
 
         # Slider with integer steps
-        self.slider = QSlider(Qt.Horizontal)
+        # self.slider = QSlider(Qt.Horizontal)
+        self.slider = QDial()
+
         self.slider.setRange(int(control.minimum), int(control.maximum))
         self.slider.setValue(int(control.value))
         self.slider.valueChanged.connect(self._on_slider_changed)

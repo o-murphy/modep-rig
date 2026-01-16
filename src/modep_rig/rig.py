@@ -79,6 +79,8 @@ class Slot:
         if effect_data:
             self.plugin._load_controls(effect_data)
 
+        # print(f"ADDED {self.id}: {self.plugin.label}: {self.plugin.uri}, in={self.plugin.inputs}, out={self.plugin.outputs}")
+        print(f"ADDED {self.id}: {self.plugin.label}: {self.plugin}")
         return self.plugin
 
     def load_by_name(self, name: str, x: int = 500, y: int = 400) -> Plugin:
@@ -177,6 +179,9 @@ class Rig:
 
         self.client.reset()
         self.reconnect()
+
+    def __del__(self):
+        self.client.reset()
 
     def __setitem__(self, key: SupportsIndex, value: str | PluginConfig | None) -> None:
         """

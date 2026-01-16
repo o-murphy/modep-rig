@@ -1,6 +1,7 @@
 import requests
 from urllib.parse import unquote, urlparse
 
+import time
 import websocket
 import threading
 
@@ -19,6 +20,7 @@ class WsClient:
         hostname = parsed.hostname if parsed.hostname else parsed.path.split(':')[0]
         self.ws_url = f"ws://{hostname}:18181/websocket"
         self.ws = None
+        self._should_reconnect = True
 
     def on_open(self, ws):
         print(f"Підключено до WebSocket: {self.ws_url}")
@@ -29,40 +31,54 @@ class WsClient:
     def on_error(self, ws, error):
         print(f"WS Помилка: {error}")
 
+    def on_close(self, ws, close_status_code, close_msg):
+        print("🔌 WebSocket з'єднання закрито")
+        if self._should_reconnect:
+            print("🔄 Спроба відновлення через 2 секунди...")
+            time.sleep(2)
+
     def connect(self):
-        self.ws = websocket.WebSocketApp(
-            self.ws_url,
-            on_open=self.on_open,
-            on_message=self.on_message, # Додайте це
-            on_error=self.on_error      # І це
-        )
-        thread = threading.Thread(target=self.ws.run_forever, daemon=True)
+        """Запуск клієнта у фоновому потоці з авто-реконнектом."""
+        def run_loop():
+            while self._should_reconnect:
+                self.ws = websocket.WebSocketApp(
+                    self.ws_url,
+                    on_open=self.on_open,
+                    on_message=self.on_message,
+                    on_error=self.on_error,
+                    on_close=self.on_close
+                )
+                # run_forever блокує потік, поки з'єднання живе
+                self.ws.run_forever()
+                
+                if not self._should_reconnect:
+                    break
+                time.sleep(1) # Невелика пауза перед наступною спробою підключення
+
+        thread = threading.Thread(target=run_loop, daemon=True)
         thread.start()
 
+    def disconnect(self):
+        """Метод для коректного закриття без реконнекту."""
+        self._should_reconnect = False
+        if self.ws:
+            self.ws.close()
+
     def effect_parameter_set(self, label: str, symbol: str, value):
-        """
-        Універсальний метод: value може бути int, float або str.
-        """
+        # Перевірка наявності сокета та активності з'єднання
         if self.ws and self.ws.sock and self.ws.sock.connected:
-            # Ми просто дозволяємо Python привести value до рядка автоматично
             command = f"param_set /graph/{label}/{symbol} {value}"
-            
             try:
+                print("DEBUG:", command)
                 self.ws.send(command)
-                print(f"DEBUG: {command}") 
                 return True
             except Exception as e:
-                print(f"WS Send Error: {e}")
-                return False
+                print(f"⚠️ Помилка відправки: {e}")
         return False
 
     def effect_bypass(self, label: str, bypass: bool):
-        """
-        Відправляє 1 для bypass=True та 0 для bypass=False.
-        """
         value = 1 if bypass else 0
         return self.effect_parameter_set(label, ":bypass", value)
-
 
 class Client:
     def __init__(self, base_url: str):
@@ -90,6 +106,9 @@ class Client:
     def _load_effects_list(self):
         data = self._request("/effect/list")
         self.effects_list = data if isinstance(data, list) else []
+        import json
+        with open("plugins.json", "w") as fp:
+            json.dump(data, fp)
 
     def _request(self, path: str, **kwargs):
         url = self.base_url + path
