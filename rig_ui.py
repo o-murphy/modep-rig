@@ -371,6 +371,8 @@ class ControlsPanel(QScrollArea):
 
         self.plugin = None
         self.control_widgets: dict[str, ControlWidget] = {}
+        self.bypass_checkbox: QCheckBox | None = None
+        self._updating_bypass = False
 
         # Placeholder
         self.placeholder = QLabel("Select a slot with a plugin to see controls")
@@ -394,9 +396,12 @@ class ControlsPanel(QScrollArea):
         name_label = QLabel(f"<b>{plugin.name}</b>")
         header.addWidget(name_label)
 
-        bypass_cb = QCheckBox("Bypass")
-        bypass_cb.toggled.connect(self._on_bypass_changed)
-        header.addWidget(bypass_cb)
+        self.bypass_checkbox = QCheckBox("Bypass")
+        # Set initial state from plugin
+        bypassed = getattr(plugin, "_bypassed", False)
+        self.bypass_checkbox.setChecked(bypassed)
+        self.bypass_checkbox.toggled.connect(self._on_bypass_changed)
+        header.addWidget(self.bypass_checkbox)
         header.addStretch()
 
         self.layout.addLayout(header)
@@ -433,6 +438,7 @@ class ControlsPanel(QScrollArea):
         for widget in self.control_widgets.values():
             widget.deleteLater()
         self.control_widgets.clear()
+        self.bypass_checkbox = None
 
         # Clear layout
         while self.layout.count():
@@ -457,9 +463,17 @@ class ControlsPanel(QScrollArea):
         if self.plugin:
             self.plugin[symbol] = value
 
+    def set_bypass_silent(self, bypassed: bool):
+        """Set bypass checkbox without emitting signal."""
+        if self.bypass_checkbox:
+            self._updating_bypass = True
+            self.bypass_checkbox.setChecked(bypassed)
+            self._updating_bypass = False
+
     def _on_bypass_changed(self, state):
         """Handle bypass checkbox change."""
-        print("bp", state)
+        if self._updating_bypass:
+            return
         if self.plugin:
             self.plugin.bypass(state)
 
@@ -586,10 +600,11 @@ class MainWindow(QMainWindow):
     def _on_ws_bypass_changed(self, label: str, bypassed: bool):
         """Handle bypass change from WebSocket - update UI."""
         # Find which slot has this plugin
-        for slot in self.rig.slots:
+        for i, slot in enumerate(self.rig.slots):
             if slot.plugin and slot.plugin.label == label:
-                # TODO: Update bypass checkbox if visible
-                print(f"🔇 UI: {label} bypass: {bypassed}")
+                # If this is the selected slot, update bypass checkbox
+                if i == self.selected_slot:
+                    self.controls_panel.set_bypass_silent(bypassed)
                 break
 
     def _on_ws_structural_changed(self, msg_type: str, _raw_message: str):

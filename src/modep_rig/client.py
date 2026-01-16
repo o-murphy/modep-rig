@@ -35,7 +35,9 @@ class WsClient:
     def __init__(self, base_url: str):
         parsed = urlparse(base_url)
         hostname = parsed.hostname if parsed.hostname else parsed.path.split(':')[0]
-        self.ws_url = f"ws://{hostname}:18181/websocket"
+        # Use same port as REST API (default 80 if not specified)
+        port = parsed.port if parsed.port else 80
+        self.ws_url = f"ws://{hostname}:{port}/websocket"
         self.ws = None
         self._should_reconnect = True
 

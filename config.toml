@@ -1,7 +1,8 @@
 # config.toml
 
 [server]
-url = "http://127.0.0.1:18181/"
+# url = "http://127.0.0.1:18181/"
+url = "http://192.168.88.247:80/"
 
 [hardware]
 # inputs = ["capture_1"] #, "capture_2"]
