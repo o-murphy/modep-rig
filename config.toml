@@ -206,6 +206,11 @@ category = "generator"
 name = "Ping Pong Pan"
 uri = "http://distrho.sf.net/plugins/PingPongPan"
 category = "spatial"
+
+# NOTE: use it to override inputs
+# inputs = ["lv2_audio_in_1"]
+# outputs = ["lv2_audio_out_1"]
+
 [[plugins]]
 name = "Auto-wah"
 uri = "http://drobilla.net/plugins/fomp/autowah"

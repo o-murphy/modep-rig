@@ -21,6 +21,9 @@ class PluginConfig:
     name: str
     uri: str
     category: str = ""
+    # Опціональні override для портів (для моно/стерео конверсії)
+    inputs: list[str] | None = None
+    outputs: list[str] | None = None
 
 
 @dataclass
@@ -62,7 +65,15 @@ class Config:
         hardware = HardwareConfig(**data.get("hardware", {}))
         rig = RigConfig(**data.get("rig", {}))
 
-        plugins = [PluginConfig(**p) for p in data.get("plugins", [])]
+        plugins = []
+        for p in data.get("plugins", []):
+            plugins.append(PluginConfig(
+                name=p["name"],
+                uri=p["uri"],
+                category=p.get("category", ""),
+                inputs=p.get("inputs"),
+                outputs=p.get("outputs"),
+            ))
 
         return cls(
             server=server,
@@ -78,6 +89,17 @@ class Config:
             if plugin.name.lower() == name_lower:
                 return plugin
         return None
+
+    def get_plugin_by_uri(self, uri: str) -> PluginConfig | None:
+        """Знайти плагін за URI"""
+        for plugin in self.plugins:
+            if plugin.uri == uri:
+                return plugin
+        return None
+
+    def is_supported(self, uri: str) -> bool:
+        """Перевірити чи плагін підтримується (є в конфігу)"""
+        return self.get_plugin_by_uri(uri) is not None
 
     def get_plugins_by_category(self, category: str) -> list[PluginConfig]:
         """Отримати всі плагіни певної категорії"""

@@ -39,6 +39,11 @@ class Slot:
 
     def load(self, uri: str, x: int = 500, y: int = 400) -> Plugin:
         """Завантажує плагін в слот (без reconnect)"""
+        # Перевіряємо чи плагін підтримується
+        plugin_config = self.rig.config.get_plugin_by_uri(uri)
+        if not plugin_config:
+            raise ValueError(f"Plugin not supported: {uri}")
+
         self._unload_internal()
 
         base_label = self._label_from_uri(uri)
@@ -51,19 +56,31 @@ class Slot:
 
         audio = result.get("ports", {}).get("audio", {})
 
-        inputs = [
+        # Отримуємо всі порти з результату
+        all_inputs = [
             Port(
                 symbol=p["symbol"], name=p["name"], graph_path=f"{label}/{p['symbol']}"
             )
             for p in audio.get("input", [])
         ]
 
-        outputs = [
+        all_outputs = [
             Port(
                 symbol=p["symbol"], name=p["name"], graph_path=f"{label}/{p['symbol']}"
             )
             for p in audio.get("output", [])
         ]
+
+        # Застосовуємо override якщо є в конфізі
+        if plugin_config.inputs is not None:
+            inputs = [p for p in all_inputs if p.symbol in plugin_config.inputs]
+        else:
+            inputs = all_inputs
+
+        if plugin_config.outputs is not None:
+            outputs = [p for p in all_outputs if p.symbol in plugin_config.outputs]
+        else:
+            outputs = all_outputs
 
         self.plugin = Plugin(
             slot=self,
@@ -79,7 +96,6 @@ class Slot:
         if effect_data:
             self.plugin._load_controls(effect_data)
 
-        # print(f"ADDED {self.id}: {self.plugin.label}: {self.plugin.uri}, in={self.plugin.inputs}, out={self.plugin.outputs}")
         print(f"ADDED {self.id}: {self.plugin.label}: {self.plugin}")
         return self.plugin
 
