@@ -4,6 +4,7 @@ PySide6 UI for MODEP Rig control.
 Run with: python rig_ui.py
 """
 
+import signal
 import sys
 from pathlib import Path
 
@@ -25,13 +26,12 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QScrollArea,
     QFrame,
-    QSizePolicy,
     QDialog,
     QListWidget,
     QListWidgetItem,
     QDialogButtonBox,
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 
 from modep_rig import Config, Rig, ControlPort
 
@@ -382,7 +382,7 @@ class ControlsPanel(QScrollArea):
         header.addWidget(name_label)
 
         bypass_cb = QCheckBox("Bypass")
-        bypass_cb.stateChanged.connect(self._on_bypass_changed)
+        bypass_cb.toggled.connect(self._on_bypass_changed)
         header.addWidget(bypass_cb)
         header.addStretch()
 
@@ -446,8 +446,9 @@ class ControlsPanel(QScrollArea):
 
     def _on_bypass_changed(self, state):
         """Handle bypass checkbox change."""
+        print("bp", state)
         if self.plugin:
-            self.plugin.bypass(state == Qt.Checked)
+            self.plugin.bypass(state)
 
 
 class MainWindow(QMainWindow):
@@ -561,8 +562,21 @@ def main():
 
     # Create and run app
     app = QApplication(sys.argv)
+    
+    # 2. Обробка сигналу Ctrl+C
+    # Використовуємо стандартний обробник сигналу Python
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+
     window = MainWindow(rig)
     window.show()
+
+    # 3. Додаємо таймер (важливо для Linux/Windows)
+    # Qt блокує виконання Python, тому без таймера Ctrl+C спрацює 
+    # лише після того, як ви якось взаємодієте з вікном.
+    timer = QTimer()
+    timer.start(500)  # Перевіряти кожні 500 мс
+    timer.timeout.connect(lambda: None)  # Порожня функція просто для "пробудження" інтерпретатора
+
     sys.exit(app.exec())
 
 

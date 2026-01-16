@@ -139,11 +139,13 @@ class Plugin:
 
     def _set_parameter(self, symbol: str, value: float) -> bool:
         """Set parameter via Client API."""
-        return self.slot.rig.client.effect_parameter_set(self.label, symbol, value)
+        # return self.slot.rig.client.effect_parameter_set(self.label, symbol, value)
+        return self.slot.rig.client.ws.effect_parameter_set(self.label, symbol, value)
 
     def _set_bypass(self, enabled: bool) -> bool:
         """Set bypass via Client API."""
-        return self.slot.rig.client.effect_bypass(self.label, enabled)
+        # return self.slot.rig.client.effect_bypass(self.label, enabled)
+        return self.slot.rig.client.ws.effect_bypass(self.label, enabled)
 
     # --- Dict-like access to control values ---
 

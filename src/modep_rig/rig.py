@@ -175,6 +175,7 @@ class Rig:
 
         self.slots: list[Slot] = [Slot(self, i) for i in range(config.rig.slot_count)]
 
+        self.client.reset()
         self.reconnect()
 
     def __setitem__(self, key: SupportsIndex, value: str | PluginConfig | None) -> None:

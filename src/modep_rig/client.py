@@ -1,6 +1,8 @@
 import requests
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 
+import websocket
+import threading
 
 __all__ = ["Client"]
 
@@ -11,11 +13,66 @@ HEADERS = {
 }
 
 
+class WsClient:
+    def __init__(self, base_url: str):
+        parsed = urlparse(base_url)
+        hostname = parsed.hostname if parsed.hostname else parsed.path.split(':')[0]
+        self.ws_url = f"ws://{hostname}:18181/websocket"
+        self.ws = None
+
+    def on_open(self, ws):
+        print(f"Підключено до WebSocket: {self.ws_url}")
+
+    def on_message(self, ws, message):
+        print(f"WS Повідомлення від сервера: {message}")
+
+    def on_error(self, ws, error):
+        print(f"WS Помилка: {error}")
+
+    def connect(self):
+        self.ws = websocket.WebSocketApp(
+            self.ws_url,
+            on_open=self.on_open,
+            on_message=self.on_message, # Додайте це
+            on_error=self.on_error      # І це
+        )
+        thread = threading.Thread(target=self.ws.run_forever, daemon=True)
+        thread.start()
+
+    def effect_parameter_set(self, label: str, symbol: str, value):
+        """
+        Універсальний метод: value може бути int, float або str.
+        """
+        if self.ws and self.ws.sock and self.ws.sock.connected:
+            # Ми просто дозволяємо Python привести value до рядка автоматично
+            command = f"param_set /graph/{label}/{symbol} {value}"
+            
+            try:
+                self.ws.send(command)
+                print(f"DEBUG: {command}") 
+                return True
+            except Exception as e:
+                print(f"WS Send Error: {e}")
+                return False
+        return False
+
+    def effect_bypass(self, label: str, bypass: bool):
+        """
+        Відправляє 1 для bypass=True та 0 для bypass=False.
+        """
+        value = 1 if bypass else 0
+        return self.effect_parameter_set(label, ":bypass", value)
+
+
 class Client:
     def __init__(self, base_url: str):
         self.base_url = base_url
-        self.effects_list = []
         self.version = self._get_version()
+        
+        self.ws = WsClient(self.base_url)
+        self.ws.connect()
+
+        self.effects_list = []
         self._load_effects_list()
 
     def _get_version(self) -> str:
