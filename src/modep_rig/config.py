@@ -35,6 +35,9 @@ class PluginConfig:
 class HardwareConfig:
     inputs: list[str] = field(default_factory=lambda: ["capture_1", "capture_2"])
     outputs: list[str] = field(default_factory=lambda: ["playback_1", "playback_2"])
+    # All-to-all routing for hardware ports
+    join_inputs: bool = False   # Join all hardware inputs to first plugin
+    join_outputs: bool = False  # Join last plugin outputs to all hardware outputs
 
 
 @dataclass
@@ -67,7 +70,13 @@ class Config:
             data = tomllib.load(f)
 
         server = ServerConfig(**data.get("server", {}))
-        hardware = HardwareConfig(**data.get("hardware", {}))
+        hw_data = data.get("hardware", {})
+        hardware = HardwareConfig(
+            inputs=hw_data.get("inputs", ["capture_1", "capture_2"]),
+            outputs=hw_data.get("outputs", ["playback_1", "playback_2"]),
+            join_inputs=hw_data.get("join_inputs", False),
+            join_outputs=hw_data.get("join_outputs", False),
+        )
         rig = RigConfig(**data.get("rig", {}))
 
         plugins = []

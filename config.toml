@@ -9,6 +9,10 @@ url = "http://192.168.88.247:80/"
 inputs = ["capture_1", "capture_2"]
 # outputs = ["playback_1"] #, "playback_2"]
 outputs = ["playback_1", "playback_2"]
+# All-to-all routing: connect all hardware inputs to all first plugin inputs
+# join_inputs = true
+# All-to-all routing: connect all last plugin outputs to all hardware outputs
+# join_outputs = true
 
 [rig]
 slot_count = 4

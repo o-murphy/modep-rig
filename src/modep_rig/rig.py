@@ -395,15 +395,25 @@ class Rig:
             return
 
         # Перевіряємо join флаги
-        src_config = None
-        dst_config = None
-        if src.plugin:
-            src_config = self.config.get_plugin_by_uri(src.plugin.uri)
-        if dst.plugin:
-            dst_config = self.config.get_plugin_by_uri(dst.plugin.uri)
+        # For plugins - check plugin config
+        # For hardware slots - check hardware config
+        join_outputs = False
+        join_inputs = False
 
-        join_outputs = src_config.join_outputs if src_config else False
-        join_inputs = dst_config.join_inputs if dst_config else False
+        if isinstance(src, HardwareSlot):
+            # Hardware input slot -> use hardware.join_inputs (affects output to first plugin)
+            join_outputs = self.config.hardware.join_inputs
+        elif src.plugin:
+            src_config = self.config.get_plugin_by_uri(src.plugin.uri)
+            join_outputs = src_config.join_outputs if src_config else False
+
+        if isinstance(dst, HardwareSlot):
+            # Hardware output slot -> use hardware.join_outputs (affects last plugin to output)
+            join_inputs = self.config.hardware.join_outputs
+        elif dst.plugin:
+            dst_config = self.config.get_plugin_by_uri(dst.plugin.uri)
+            join_inputs = dst_config.join_inputs if dst_config else False
+
         use_join = join_outputs or join_inputs
 
         connections = []
