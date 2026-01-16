@@ -1,4 +1,7 @@
 now
+* if we connecting slots according to it's order, so then slot id can be any or kinda uuid4 and we'll be able insert new slots between others
+* we have to detect hardware ports by rest api
+* we should have hardware ports overrides/routing configuration same as for plugins, i mean join_outs join_inputs
 * bypass feedback not displaying in rig_ui.py
 * CRITICAL: client can't resolve diverence between once who triggered the structural change, and reacts on events created by itself! 
 * structural changes should call Client.reset and rebuild board from current stored rig state
