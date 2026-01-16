@@ -50,6 +50,12 @@ class WsClient:
         self._suppress_structural = False
         self._suppress_params: set[tuple[str, str]] = set()  # (label, symbol) pairs to ignore
 
+        # Hardware ports discovered via WebSocket
+        self._hw_audio_inputs: list[str] = []
+        self._hw_audio_outputs: list[str] = []
+        self._hw_ready = threading.Event()
+        self._connected = threading.Event()
+
     def set_callbacks(
         self,
         on_param_change: Callable[[str, str, float], None] | None = None,
@@ -77,6 +83,11 @@ class WsClient:
 
     def on_open(self, ws):
         print(f"Підключено до WebSocket: {self.ws_url}")
+        # Reset hardware ports on reconnect
+        self._hw_audio_inputs.clear()
+        self._hw_audio_outputs.clear()
+        self._hw_ready.clear()
+        self._connected.set()
 
     def on_message(self, ws, message: str):
         """Parse and dispatch WebSocket messages."""
@@ -88,6 +99,37 @@ class WsClient:
 
         # Ignore stats messages
         if msg_type in IGNORE_MESSAGES:
+            return
+
+        # Hardware port discovery: add_hw_port /graph/capture_1 audio 0 Capture 0
+        # Format: add_hw_port /graph/<port_name> <type> <is_output> <name> <cv_flag>
+        # MOD-UI perspective (graph-centric):
+        #   is_output=0: port is INPUT to graph (capture - audio enters graph from hardware)
+        #   is_output=1: port is OUTPUT from graph (playback - audio exits graph to hardware)
+        if msg_type == "add_hw_port" and len(parts) >= 5:
+            port_path = parts[1]  # /graph/capture_1
+            port_type = parts[2]  # audio or midi
+            is_graph_output = parts[3] == "1"
+
+            if port_type == "audio" and port_path.startswith("/graph/"):
+                port_name = port_path[7:]  # Remove "/graph/"
+                if is_graph_output:
+                    # Graph output = playback = audio OUTPUT from our rig to speakers
+                    if port_name not in self._hw_audio_outputs:
+                        self._hw_audio_outputs.append(port_name)
+                        print(f"WS << HW output: {port_name}")
+                else:
+                    # Graph input = capture = audio INPUT to our rig from mic/guitar
+                    if port_name not in self._hw_audio_inputs:
+                        self._hw_audio_inputs.append(port_name)
+                        print(f"WS << HW input: {port_name}")
+            return
+
+        # loading_end signals that all hardware ports have been reported
+        if msg_type == "loading_end":
+            if not self._hw_ready.is_set():
+                self._hw_ready.set()
+                print(f"WS << Hardware ports ready: inputs={self._hw_audio_inputs}, outputs={self._hw_audio_outputs}")
             return
 
         # Structural changes - plugins, connections, pedalboard
@@ -146,6 +188,7 @@ class WsClient:
 
     def on_close(self, ws, close_status_code, close_msg):
         print("🔌 WebSocket з'єднання закрито")
+        self._connected.clear()
         if self._should_reconnect:
             print("🔄 Спроба відновлення через 2 секунди...")
             time.sleep(2)
@@ -197,6 +240,37 @@ class WsClient:
     def effect_bypass(self, label: str, bypass: bool):
         value = 1 if bypass else 0
         return self.effect_parameter_set(label, ":bypass", value)
+
+    def get_hardware_ports(self, timeout: float = 5.0) -> tuple[list[str], list[str]]:
+        """Get discovered hardware ports.
+
+        Args:
+            timeout: Max time to wait for ports discovery (seconds)
+
+        Returns:
+            Tuple of (inputs, outputs) port name lists
+        """
+        # First wait for WebSocket connection
+        if not self._connected.wait(timeout):
+            print(f"⚠️ WebSocket not connected after {timeout}s")
+            return [], []
+
+        # Then wait for hardware ports to be discovered
+        if not self._hw_ready.wait(timeout):
+            print(f"⚠️ Hardware ports not ready after {timeout}s, using discovered so far")
+
+        return list(self._hw_audio_inputs), list(self._hw_audio_outputs)
+
+    @property
+    def hw_inputs(self) -> list[str]:
+        """Hardware audio inputs (capture ports)."""
+        return list(self._hw_audio_inputs)
+
+    @property
+    def hw_outputs(self) -> list[str]:
+        """Hardware audio outputs (playback ports)."""
+        return list(self._hw_audio_outputs)
+
 
 class Client:
     def __init__(self, base_url: str):
@@ -456,3 +530,14 @@ class Client:
     def system_prefs(self):
         """Отримати системні налаштування"""
         return self._request("/system/prefs")
+
+    def get_hardware_ports(self, timeout: float = 5.0) -> tuple[list[str], list[str]]:
+        """Get hardware audio ports discovered via WebSocket.
+
+        Args:
+            timeout: Max time to wait for ports discovery (seconds)
+
+        Returns:
+            Tuple of (inputs, outputs) port name lists
+        """
+        return self.ws.get_hardware_ports(timeout)

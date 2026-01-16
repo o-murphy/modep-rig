@@ -33,8 +33,9 @@ class PluginConfig:
 
 @dataclass
 class HardwareConfig:
-    inputs: list[str] = field(default_factory=lambda: ["capture_1", "capture_2"])
-    outputs: list[str] = field(default_factory=lambda: ["playback_1", "playback_2"])
+    # None = auto-detect from MOD-UI, list = override with specific ports
+    inputs: list[str] | None = None
+    outputs: list[str] | None = None
     # All-to-all routing for hardware ports
     join_inputs: bool = False   # Join all hardware inputs to first plugin
     join_outputs: bool = False  # Join last plugin outputs to all hardware outputs
@@ -72,8 +73,8 @@ class Config:
         server = ServerConfig(**data.get("server", {}))
         hw_data = data.get("hardware", {})
         hardware = HardwareConfig(
-            inputs=hw_data.get("inputs", ["capture_1", "capture_2"]),
-            outputs=hw_data.get("outputs", ["playback_1", "playback_2"]),
+            inputs=hw_data.get("inputs"),  # None = auto-detect
+            outputs=hw_data.get("outputs"),  # None = auto-detect
             join_inputs=hw_data.get("join_inputs", False),
             join_outputs=hw_data.get("join_outputs", False),
         )

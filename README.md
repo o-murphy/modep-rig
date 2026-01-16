@@ -24,8 +24,10 @@ Create `config.toml`:
 url = "http://127.0.0.1:18181/"
 
 [hardware]
-inputs = ["capture_1", "capture_2"]   # Hardware inputs (from audio interface)
-outputs = ["playback_1", "playback_2"] # Hardware outputs (to audio interface)
+# Hardware ports are auto-detected from MOD-UI by default.
+# Uncomment to override with specific ports:
+# inputs = ["capture_1", "capture_2"]   # Hardware inputs (from audio interface)
+# outputs = ["playback_1", "playback_2"] # Hardware outputs (to audio interface)
 
 [rig]
 slot_count = 4              # Number of effect slots in chain
@@ -80,14 +82,25 @@ join_outputs = true  # All outputs connect to all inputs of next plugin
 - `join_outputs = true` on source plugin: all its outputs connect to all inputs of the next plugin
 - `join_inputs = true` on destination plugin: all outputs from previous plugin connect to all its inputs
 
+### Hardware Port Auto-Detection
+
+By default, hardware ports are automatically detected from MOD-UI via WebSocket on startup.
+The detected ports (e.g., `capture_1`, `capture_2`, `playback_1`, `playback_2`) are used for routing.
+
+To override auto-detection, specify ports explicitly in config:
+
+```toml
+[hardware]
+inputs = ["capture_1"]   # Override: use only first input
+outputs = ["playback_1", "playback_2"]
+```
+
 ### Hardware Join Mode
 
 Similar join routing is available for hardware inputs/outputs:
 
 ```toml
 [hardware]
-inputs = ["capture_1", "capture_2"]
-outputs = ["playback_1", "playback_2"]
 join_inputs = true   # All hardware inputs connect to all inputs of first plugin
 join_outputs = true  # All outputs of last plugin connect to all hardware outputs
 ```

@@ -223,18 +223,49 @@ class Rig:
     Rig — ланцюг ефектів: Input -> [Slot 0] -> [Slot 1] -> ... -> Output
     """
 
+    def _resolve_hardware_ports(self) -> tuple[list[str], list[str]]:
+        """Resolve hardware ports from config or auto-detect from MOD-UI.
+
+        Returns:
+            Tuple of (inputs, outputs) port lists
+        """
+        hw_config = self.config.hardware
+
+        # Use config override if specified, otherwise auto-detect
+        if hw_config.inputs is not None:
+            inputs = hw_config.inputs
+        else:
+            inputs, _ = self.client.get_hardware_ports(timeout=5.0)
+            if not inputs:
+                print("⚠️ No hardware inputs detected, using defaults")
+                inputs = ["capture_1", "capture_2"]
+
+        if hw_config.outputs is not None:
+            outputs = hw_config.outputs
+        else:
+            _, outputs = self.client.get_hardware_ports(timeout=0.1)  # Already waited above
+            if not outputs:
+                print("⚠️ No hardware outputs detected, using defaults")
+                outputs = ["playback_1", "playback_2"]
+
+        print(f"Hardware ports: inputs={inputs}, outputs={outputs}")
+        return inputs, outputs
+
     def __init__(self, config: Config, client: Client = None):
         self.config = config
         self.client = client or Client(config.server.url)
 
+        # Determine hardware ports (auto-detect or from config)
+        hw_inputs, hw_outputs = self._resolve_hardware_ports()
+
         self.input_slot = HardwareSlot(
-            self, -1, ports=config.hardware.inputs, is_input=True
+            self, -1, ports=hw_inputs, is_input=True
         )
 
         self.output_slot = HardwareSlot(
             self,
             config.rig.slot_count,
-            ports=config.hardware.outputs,
+            ports=hw_outputs,
             is_input=False,
         )
 
