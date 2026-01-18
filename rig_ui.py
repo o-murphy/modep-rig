@@ -305,17 +305,23 @@ class SlotWidget(QFrame):
 
     clicked = Signal(str)  # slot_uuid
     remove_requested = Signal(str)  # slot_uuid
+    load_requested = Signal(str)  # slot_uuid
+    replace_requested = Signal(str)  # slot_uuid
+    unload_plugin_requested = Signal(str)  # slot_uuid
 
-    def __init__(self, slot_uuid: str, index: int, plugin_name: str, parent=None):
+    def __init__(self, slot_uuid: str, index: int, plugin_name: str, is_empty: bool = False, parent=None):
         super().__init__(parent)
         self.slot_uuid = slot_uuid
         self.index = index
         self.is_selected = False
+        self.is_empty = is_empty
 
         self.setFrameStyle(QFrame.Box | QFrame.Raised)
         self.setLineWidth(2)
         self.setCursor(Qt.PointingHandCursor)
         self.setMinimumSize(120, 80)
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
 
         layout = QVBoxLayout(self)
 
@@ -330,15 +336,11 @@ class SlotWidget(QFrame):
         self.plugin_label.setWordWrap(True)
         layout.addWidget(self.plugin_label)
 
-        # Remove button
-        self.remove_btn = QPushButton("Remove")
-        self.remove_btn.clicked.connect(lambda: self.remove_requested.emit(self.slot_uuid))
-        layout.addWidget(self.remove_btn)
-
         self._update_style()
 
-    def set_plugin_name(self, name: str):
+    def set_plugin_name(self, name: str, is_empty: bool = False):
         self.plugin_label.setText(name)
+        self.is_empty = is_empty
 
     def set_selected(self, selected: bool):
         self.is_selected = selected
@@ -350,6 +352,25 @@ class SlotWidget(QFrame):
         else:
             self.setStyleSheet("")
 
+    def _show_context_menu(self, pos):
+        """Show context menu for slot operations."""
+        menu = QMenu()
+        
+        if self.is_empty:
+            load_action = menu.addAction("Load Plugin")
+            load_action.triggered.connect(lambda: self.load_requested.emit(self.slot_uuid))
+        else:
+            replace_action = menu.addAction("Replace Plugin")
+            replace_action.triggered.connect(lambda: self.replace_requested.emit(self.slot_uuid))
+            
+            unload_action = menu.addAction("Unload Plugin (Keep Slot)")
+            unload_action.triggered.connect(lambda: self.unload_plugin_requested.emit(self.slot_uuid))
+        
+        remove_action = menu.addAction("Remove Slot")
+        remove_action.triggered.connect(lambda: self.remove_requested.emit(self.slot_uuid))
+        
+        menu.exec(self.mapToGlobal(pos))
+
     def mousePressEvent(self, event):
         self.clicked.emit(self.slot_uuid)
         super().mousePressEvent(event)
@@ -357,9 +378,6 @@ class SlotWidget(QFrame):
 
 class ControlsPanel(QScrollArea):
     """Panel showing controls for selected plugin."""
-
-    replace_plugin_requested = Signal(str)  # slot_uuid
-    load_plugin_requested = Signal(str)  # slot_uuid
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -390,17 +408,8 @@ class ControlsPanel(QScrollArea):
         self.current_slot_uuid = slot_uuid
 
         if plugin is None:
-            # Show Load button for empty slots
-            if slot_uuid:
-                self.placeholder.setText("Empty Slot")
-                self.placeholder.show()
-                
-                load_btn = QPushButton("Load Plugin")
-                load_btn.clicked.connect(self._on_load_clicked)
-                self.layout.insertWidget(0, load_btn)
-            else:
-                self.placeholder.setText("Select a slot")
-                self.placeholder.show()
+            self.placeholder.setText("Select a slot to see controls")
+            self.placeholder.show()
             return
 
         self.placeholder.hide()
@@ -416,11 +425,6 @@ class ControlsPanel(QScrollArea):
         self.bypass_checkbox.setChecked(bypassed)
         self.bypass_checkbox.toggled.connect(self._on_bypass_changed)
         header.addWidget(self.bypass_checkbox)
-        
-        # Replace button
-        replace_btn = QPushButton("Replace")
-        replace_btn.clicked.connect(self._on_replace_clicked)
-        header.addWidget(replace_btn)
         
         header.addStretch()
 
@@ -452,16 +456,6 @@ class ControlsPanel(QScrollArea):
 
         self.layout.addWidget(controls_group)
         self.layout.addStretch()
-
-    def _on_replace_clicked(self):
-        """Emit signal to replace current plugin."""
-        if self.current_slot_uuid:
-            self.replace_plugin_requested.emit(self.current_slot_uuid)
-
-    def _on_load_clicked(self):
-        """Emit signal to load plugin in empty slot."""
-        if self.current_slot_uuid:
-            self.load_plugin_requested.emit(self.current_slot_uuid)
 
     def _clear_controls(self):
         """Remove all control widgets."""
@@ -566,8 +560,6 @@ class MainWindow(QMainWindow):
         # Right side - controls panel
         self.controls_panel = ControlsPanel()
         self.controls_panel.setMinimumWidth(500)
-        self.controls_panel.replace_plugin_requested.connect(self._on_replace_plugin_requested)
-        self.controls_panel.load_plugin_requested.connect(self._on_load_plugin_requested)
         main_layout.addWidget(self.controls_panel, stretch=1)
 
         # Initial state - rebuild slot widgets
@@ -588,10 +580,14 @@ class MainWindow(QMainWindow):
 
         # Create new widgets for each slot (only slots with plugins exist now)
         for i, slot in enumerate(self.rig.slots):
-            plugin_name = slot.plugin.name if slot.plugin else "?"
-            slot_widget = SlotWidget(slot.uuid, i, plugin_name)
+            plugin_name = slot.plugin.name if slot.plugin else "Empty"
+            is_empty = slot.is_empty
+            slot_widget = SlotWidget(slot.uuid, i, plugin_name, is_empty)
             slot_widget.clicked.connect(self._on_slot_clicked)
             slot_widget.remove_requested.connect(self._on_remove_slot)
+            slot_widget.load_requested.connect(self._on_load_plugin_requested)
+            slot_widget.replace_requested.connect(self._on_replace_plugin_requested)
+            slot_widget.unload_plugin_requested.connect(self._on_unload_plugin_requested)
             self.slot_widgets.append(slot_widget)
             self.slots_container.addWidget(slot_widget)
 
@@ -660,19 +656,16 @@ class MainWindow(QMainWindow):
         """Remove the specified slot."""
         slot = self.rig.get_slot(slot_uuid)
         if slot:
-            # Show context menu with options
-            menu = QMenu()
-            unload_action = menu.addAction("Unload Plugin (Keep Slot)")
-            remove_action = menu.addAction("Remove Slot")
-            
-            action = menu.exec(QCursor.pos())
-            
-            if action == unload_action:
-                slot.unload_plugin()
-                self._rebuild_slot_widgets()
-            elif action == remove_action:
-                self.rig.remove_slot(slot)
-                self._rebuild_slot_widgets()
+            self.rig.remove_slot(slot)
+            self._rebuild_slot_widgets()
+
+    def _on_unload_plugin_requested(self, slot_uuid: str):
+        """Unload plugin from slot (keep slot empty)."""
+        slot = self.rig.get_slot(slot_uuid)
+        if slot and not slot.is_empty:
+            slot.unload_plugin()
+            self._rebuild_slot_widgets()
+            self._select_slot(slot_uuid)
 
     def _on_replace_plugin_requested(self, slot_uuid: str):
         """Replace plugin in the specified slot."""

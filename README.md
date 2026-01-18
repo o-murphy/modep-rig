@@ -144,6 +144,21 @@ rig.load_preset("my_preset.json")
 rig.clear()
 ```
 
+## UI Controls
+
+The rig_ui.py GUI provides intuitive controls:
+
+- **Slot Widgets**: Visual representation of each plugin slot in the chain
+  - **Right-click context menu**:
+    - **Empty slots**: Load Plugin
+    - **Filled slots**: Replace Plugin, Unload Plugin (Keep Slot)
+    - **All slots**: Remove Slot
+
+- **Controls Panel**: Displays plugin controls for selected slot
+  - Plugin name and bypass toggle
+  - Parameter controls in grid layout
+  - All plugin modifications done via slot context menus (no buttons in panel)
+
 ## Make-Before-Break Plugin Switching
 
 The rig implements seamless plugin switching without audio interruption:

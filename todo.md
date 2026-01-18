@@ -9,6 +9,7 @@ now
   * ~~Add Replace button to ControlsPanel for filled slots~~ ✓
   * ~~Implement Slot.load_and_connect() for loading plugins into empty slots~~ ✓
   * ~~Implement Slot.replace() with make-before-break semantics~~ ✓
+  * ~~Move Load/Replace buttons to context menu~~ ✓
   
   Implementation complete:
   - Method `Slot.load(uri)`: loads plugin (remove old first, no reconnect)
@@ -18,8 +19,8 @@ now
   - Method `Slot.unload_plugin()`: removes plugin only, keeps empty slot
   - Method `Rig._reconnect_slot(slot)`: partial reconnection for single slot with @suppress_structural
   - Method `Rig._disconnect_pair(src, dst)`: disconnect specific route pairs
-  - Updated `rig_ui.py ControlsPanel`: shows Load button for empty slots, Replace button for filled slots
-  - Updated `rig_ui.py MainWindow`: handlers for load_plugin_requested and replace_plugin_requested signals
+  - Updated `SlotWidget`: context menu with Load/Replace/Unload/Remove options
+  - Updated `ControlsPanel`: simple display of plugin controls without action buttons
 * saving/restoring rig state to/from JSON is not comletely done, not tested, we have to comlete it. 
   * do we able to use .pedalboard files?
   * should we first make a server state syncing?
