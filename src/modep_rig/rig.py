@@ -1,3 +1,4 @@
+import uuid as uuid_module
 from functools import wraps
 from typing import Callable, SupportsIndex
 
@@ -35,10 +36,18 @@ __all__ = ["Slot", "HardwareSlot", "Rig"]
 class Slot:
     """Слот для плагіна в ланцюгу ефектів"""
 
-    def __init__(self, rig: "Rig", slot_id: int):
+    def __init__(self, rig: "Rig", slot_uuid: str = None):
         self.rig = rig
-        self.id = slot_id
+        self.uuid = slot_uuid or str(uuid_module.uuid4())[:8]
         self.plugin: Plugin | None = None
+
+    @property
+    def index(self) -> int:
+        """Поточна позиція слота в ланцюгу (динамічно обчислюється)."""
+        try:
+            return self.rig.slots.index(self)
+        except ValueError:
+            return -1
 
     @property
     def inputs(self) -> list[str]:
@@ -85,9 +94,9 @@ class Slot:
         self._unload_internal()
 
         base_label = self._label_from_uri(uri)
-        label = f"{base_label}_{self.id}"
+        label = f"{base_label}_{self.uuid}"
 
-        result = self.rig.client.effect_add(label, uri, x * (self.id + 1), y)
+        result = self.rig.client.effect_add(label, uri, x * (self.index + 1), y)
 
         if not result or not isinstance(result, dict) or not result.get("valid"):
             raise Exception(f"Failed to load plugin: {uri}")
@@ -134,7 +143,7 @@ class Slot:
         if effect_data:
             self.plugin._load_controls(effect_data)
 
-        print(f"ADDED {self.id}: {self.plugin.label}: {self.plugin}")
+        print(f"ADDED [{self.index}] {self.uuid}: {self.plugin.label}: {self.plugin}")
         return self.plugin
 
     def load_by_name(self, name: str, x: int = 500, y: int = 400) -> Plugin:
@@ -145,8 +154,11 @@ class Slot:
         return self.load(plugin_config.uri, x, y)
 
     def unload(self):
-        """Вивантажує плагін і запускає reconnect"""
+        """Вивантажує плагін, видаляє слот з рігу і запускає reconnect"""
         self._unload_internal()
+        # Remove empty slot from rig
+        if self in self.rig.slots:
+            self.rig.slots.remove(self)
         self.rig.reconnect()
 
     def _unload_internal(self):
@@ -165,15 +177,17 @@ class Slot:
 
     def __repr__(self):
         if self.plugin:
-            return f"Slot({self.id}, {self.plugin.label})"
-        return f"Slot({self.id}, empty)"
+            return f"Slot({self.uuid}, {self.plugin.label})"
+        return f"Slot({self.uuid}, empty)"
 
 
 class HardwareSlot(Slot):
     """Hardware I/O слот (capture/playback)"""
 
-    def __init__(self, rig: "Rig", slot_id: int, ports: list[str], is_input: bool):
-        super().__init__(rig, slot_id)
+    def __init__(self, rig: "Rig", ports: list[str], is_input: bool):
+        # Hardware slots get fixed uuid
+        slot_uuid = "hw_in" if is_input else "hw_out"
+        super().__init__(rig, slot_uuid)
         self._ports = ports
         self._is_input = is_input
 
@@ -210,7 +224,7 @@ class HardwareSlot(Slot):
 
     def __repr__(self):
         kind = "Input" if self._is_input else "Output"
-        return f"HardwareSlot({self.id}, {kind}, ports={self._ports})"
+        return f"HardwareSlot({self.uuid}, {kind}, ports={self._ports})"
 
 
 # =============================================================================
@@ -258,18 +272,11 @@ class Rig:
         # Determine hardware ports (auto-detect or from config)
         hw_inputs, hw_outputs = self._resolve_hardware_ports()
 
-        self.input_slot = HardwareSlot(
-            self, -1, ports=hw_inputs, is_input=True
-        )
+        self.input_slot = HardwareSlot(self, ports=hw_inputs, is_input=True)
+        self.output_slot = HardwareSlot(self, ports=hw_outputs, is_input=False)
 
-        self.output_slot = HardwareSlot(
-            self,
-            config.rig.slot_count,
-            ports=hw_outputs,
-            is_input=False,
-        )
-
-        self.slots: list[Slot] = [Slot(self, i) for i in range(config.rig.slot_count)]
+        # Dynamic slots list - starts empty, add slots as needed
+        self.slots: list[Slot] = []
 
         # External callbacks (for UI)
         self._ext_on_param_change: OnParamChangeCallback | None = None
@@ -357,16 +364,26 @@ class Rig:
         rig[0] = "DS1"                  — завантажити плагін за ім'ям з конфігу
         rig[0] = plugin_config          — завантажити плагін з PluginConfig
         rig[0] = None                   — очистити слот
+
+        Автоматично створює слоти якщо індекс виходить за межі (до slots_limit).
         """
+        idx = key.__index__() if hasattr(key, '__index__') else int(key)
+
+        # Auto-extend slots if needed (up to limit)
+        while idx >= len(self.slots):
+            if self.config.rig.slots_limit and len(self.slots) >= self.config.rig.slots_limit:
+                raise IndexError(f"Cannot add more slots: limit is {self.config.rig.slots_limit}")
+            self.add_slot()
+
         if value is None:
-            self.slots[key]._unload_internal()
+            self.slots[idx]._unload_internal()
         elif isinstance(value, PluginConfig):
-            self.slots[key].load(value.uri)
+            self.slots[idx].load(value.uri)
         elif value.startswith("http://") or value.startswith("https://"):
-            self.slots[key].load(value)
+            self.slots[idx].load(value)
         else:
             # Припускаємо, що це ім'я плагіна
-            self.slots[key].load_by_name(value)
+            self.slots[idx].load_by_name(value)
         self.reconnect()
 
     def __getitem__(self, key: SupportsIndex) -> Slot:
@@ -374,6 +391,63 @@ class Rig:
 
     def __len__(self) -> int:
         return len(self.slots)
+
+    # =========================================================================
+    # Dynamic Slot Management
+    # =========================================================================
+
+    def add_slot(self, position: int = None) -> Slot:
+        """Додає новий слот.
+
+        Args:
+            position: Позиція для вставки. None = в кінець.
+
+        Returns:
+            Новостворений слот.
+
+        Raises:
+            IndexError: Якщо досягнуто slots_limit.
+        """
+        if self.config.rig.slots_limit and len(self.slots) >= self.config.rig.slots_limit:
+            raise IndexError(f"Cannot add more slots: limit is {self.config.rig.slots_limit}")
+
+        slot = Slot(self)
+        if position is None:
+            self.slots.append(slot)
+        else:
+            self.slots.insert(position, slot)
+        return slot
+
+    @suppress_structural
+    def remove_slot(self, slot: Slot) -> bool:
+        """Видаляє слот.
+
+        Args:
+            slot: Слот для видалення.
+
+        Returns:
+            True якщо слот було видалено.
+        """
+        if slot in self.slots:
+            slot._unload_internal()
+            self.slots.remove(slot)
+            self.reconnect()
+            return True
+        return False
+
+    def get_slot(self, uuid: str) -> Slot | None:
+        """Знайти слот за uuid.
+
+        Args:
+            uuid: UUID слота.
+
+        Returns:
+            Слот або None якщо не знайдено.
+        """
+        for slot in self.slots:
+            if slot.uuid == uuid:
+                return slot
+        return None
 
     def reconnect(self):
         """Перебудовує всі з'єднання в ланцюгу"""
@@ -491,9 +565,10 @@ class Rig:
 
     @suppress_structural
     def clear(self):
-        """Очищає всі слоти"""
-        for slot in self.slots:
+        """Очищає та видаляє всі слоти"""
+        for slot in list(self.slots):
             slot._unload_internal()
+        self.slots.clear()
         self.reconnect()
 
     def list_available_plugins(self) -> list[PluginConfig]:
@@ -519,22 +594,22 @@ class Rig:
             dict with structure:
             {
                 "slots": [
-                    {"uri": "http://...", "controls": {"Dist": 0.5, ...}, "bypassed": False},
-                    None,  # empty slot
+                    {"uuid": "abc123", "uri": "http://...", "controls": {...}, "bypassed": False},
+                    {"uuid": "def456"},  # empty slot
                     ...
                 ]
             }
         """
         slots_state = []
         for slot in self.slots:
+            slot_data = {"uuid": slot.uuid}
             if slot.plugin:
-                slots_state.append({
+                slot_data.update({
                     "uri": slot.plugin.uri,
                     "controls": slot.plugin.get_state(),
                     "bypassed": getattr(slot.plugin, "_bypassed", False),
                 })
-            else:
-                slots_state.append(None)
+            slots_state.append(slot_data)
 
         return {"slots": slots_state}
 
@@ -547,34 +622,37 @@ class Rig:
         """
         slots_state = state.get("slots", [])
 
-        # First, clear all slots without reconnect
-        for slot in self.slots:
+        # Clear all existing slots
+        for slot in list(self.slots):
             slot._unload_internal()
+        self.slots.clear()
 
-        # Load plugins into slots
-        for i, slot_state in enumerate(slots_state):
-            if i >= len(self.slots):
-                break
-
+        # Create slots from preset
+        for slot_state in slots_state:
             if slot_state is None:
                 continue
 
+            # Create slot with uuid from preset (or generate new)
+            slot_uuid = slot_state.get("uuid")
+            slot = Slot(self, slot_uuid)
+            self.slots.append(slot)
+
             uri = slot_state.get("uri")
             if not uri:
-                continue
+                continue  # Empty slot
 
             try:
-                self.slots[i].load(uri)
+                slot.load(uri)
                 # Restore control values
                 controls = slot_state.get("controls", {})
-                if controls and self.slots[i].plugin:
-                    self.slots[i].plugin.set_state(controls)
+                if controls and slot.plugin:
+                    slot.plugin.set_state(controls)
                 # Restore bypass
                 bypassed = slot_state.get("bypassed", False)
-                if bypassed and self.slots[i].plugin:
-                    self.slots[i].plugin.bypass(True)
+                if bypassed and slot.plugin:
+                    slot.plugin.bypass(True)
             except Exception as e:
-                print(f"Failed to restore slot {i}: {e}")
+                print(f"Failed to restore slot {slot_uuid}: {e}")
 
         # Reconnect all
         self.reconnect()

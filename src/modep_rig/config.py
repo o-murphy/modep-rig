@@ -48,7 +48,8 @@ class ServerConfig:
 
 @dataclass
 class RigConfig:
-    slot_count: int = 4
+    # Maximum number of slots allowed (None = unlimited)
+    slots_limit: int | None = None
 
 
 @dataclass
@@ -78,7 +79,10 @@ class Config:
             join_inputs=hw_data.get("join_inputs", False),
             join_outputs=hw_data.get("join_outputs", False),
         )
-        rig = RigConfig(**data.get("rig", {}))
+        rig_data = data.get("rig", {})
+        rig = RigConfig(
+            slots_limit=rig_data.get("slots_limit") or rig_data.get("slot_count"),  # backward compat
+        )
 
         plugins = []
         for p in data.get("plugins", []):

@@ -301,13 +301,13 @@ class PluginSelectorDialog(QDialog):
 class SlotWidget(QFrame):
     """Widget representing a single slot in the rig."""
 
-    clicked = Signal(int)  # slot_id
-    load_requested = Signal(int)  # slot_id
-    clear_requested = Signal(int)  # slot_id
+    clicked = Signal(str)  # slot_uuid
+    remove_requested = Signal(str)  # slot_uuid
 
-    def __init__(self, slot_id: int, parent=None):
+    def __init__(self, slot_uuid: str, index: int, plugin_name: str, parent=None):
         super().__init__(parent)
-        self.slot_id = slot_id
+        self.slot_uuid = slot_uuid
+        self.index = index
         self.is_selected = False
 
         self.setFrameStyle(QFrame.Box | QFrame.Raised)
@@ -318,38 +318,25 @@ class SlotWidget(QFrame):
         layout = QVBoxLayout(self)
 
         # Slot number
-        self.slot_label = QLabel(f"Slot {slot_id}")
+        self.slot_label = QLabel(f"Slot {index}")
         self.slot_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.slot_label)
 
         # Plugin name
-        self.plugin_label = QLabel("Empty")
+        self.plugin_label = QLabel(plugin_name)
         self.plugin_label.setAlignment(Qt.AlignCenter)
         self.plugin_label.setWordWrap(True)
         layout.addWidget(self.plugin_label)
 
-        # Buttons
-        btn_layout = QHBoxLayout()
-        self.load_btn = QPushButton("Load")
-        self.load_btn.clicked.connect(lambda: self.load_requested.emit(self.slot_id))
-        btn_layout.addWidget(self.load_btn)
-
-        self.clear_btn = QPushButton("Clear")
-        self.clear_btn.clicked.connect(lambda: self.clear_requested.emit(self.slot_id))
-        self.clear_btn.setEnabled(False)
-        btn_layout.addWidget(self.clear_btn)
-
-        layout.addLayout(btn_layout)
+        # Remove button
+        self.remove_btn = QPushButton("Remove")
+        self.remove_btn.clicked.connect(lambda: self.remove_requested.emit(self.slot_uuid))
+        layout.addWidget(self.remove_btn)
 
         self._update_style()
 
-    def set_plugin_name(self, name: str | None):
-        if name:
-            self.plugin_label.setText(name)
-            self.clear_btn.setEnabled(True)
-        else:
-            self.plugin_label.setText("Empty")
-            self.clear_btn.setEnabled(False)
+    def set_plugin_name(self, name: str):
+        self.plugin_label.setText(name)
 
     def set_selected(self, selected: bool):
         self.is_selected = selected
@@ -362,7 +349,7 @@ class SlotWidget(QFrame):
             self.setStyleSheet("")
 
     def mousePressEvent(self, event):
-        self.clicked.emit(self.slot_id)
+        self.clicked.emit(self.slot_uuid)
         super().mousePressEvent(event)
 
 
@@ -494,7 +481,7 @@ class MainWindow(QMainWindow):
     def __init__(self, rig: Rig):
         super().__init__()
         self.rig = rig
-        self.selected_slot = 0
+        self.selected_slot_uuid: str | None = None
 
         # Setup signals for thread-safe UI updates
         self.rig_signals = RigSignals()
@@ -518,79 +505,112 @@ class MainWindow(QMainWindow):
         main_layout = QHBoxLayout(central)
 
         # Left side - slots
-        left_panel = QVBoxLayout()
+        self.left_panel = QVBoxLayout()
 
         slots_label = QLabel("<b>Effect Chain</b>")
-        left_panel.addWidget(slots_label)
+        self.left_panel.addWidget(slots_label)
+
+        # Container for slot widgets (will be rebuilt dynamically)
+        self.slots_container = QVBoxLayout()
+        self.left_panel.addLayout(self.slots_container)
 
         self.slot_widgets: list[SlotWidget] = []
-        for i in range(len(rig)):
-            slot_widget = SlotWidget(i)
-            slot_widget.clicked.connect(self._on_slot_clicked)
-            slot_widget.load_requested.connect(self._on_load_requested)
-            slot_widget.clear_requested.connect(self._on_clear_requested)
-            self.slot_widgets.append(slot_widget)
-            left_panel.addWidget(slot_widget)
 
-        left_panel.addStretch()
+        # Add slot button
+        self.add_slot_btn = QPushButton("+ Add Slot")
+        self.add_slot_btn.clicked.connect(self._on_add_slot)
+        self.left_panel.addWidget(self.add_slot_btn)
+
+        self.left_panel.addStretch()
 
         # Clear all button
         clear_all_btn = QPushButton("Clear All")
         clear_all_btn.clicked.connect(self._on_clear_all)
-        left_panel.addWidget(clear_all_btn)
+        self.left_panel.addWidget(clear_all_btn)
 
-        main_layout.addLayout(left_panel)
+        main_layout.addLayout(self.left_panel)
 
         # Right side - controls panel
         self.controls_panel = ControlsPanel()
         self.controls_panel.setMinimumWidth(500)
         main_layout.addWidget(self.controls_panel, stretch=1)
 
-        # Initial state
-        self._refresh_slots()
-        self._select_slot(0)
+        # Initial state - rebuild slot widgets
+        self._rebuild_slot_widgets()
 
-    def _refresh_slots(self):
-        """Update slot widgets from rig state."""
-        for i, slot_widget in enumerate(self.slot_widgets):
-            slot = self.rig[i]
-            if slot.plugin:
-                slot_widget.set_plugin_name(slot.plugin.name)
-            else:
-                slot_widget.set_plugin_name(None)
+    def _rebuild_slot_widgets(self):
+        """Rebuild all slot widgets from rig state."""
+        # Clear existing widgets
+        for widget in self.slot_widgets:
+            widget.deleteLater()
+        self.slot_widgets.clear()
 
-    def _select_slot(self, slot_id: int):
+        # Clear layout
+        while self.slots_container.count():
+            item = self.slots_container.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        # Create new widgets for each slot (only slots with plugins exist now)
+        for i, slot in enumerate(self.rig.slots):
+            plugin_name = slot.plugin.name if slot.plugin else "?"
+            slot_widget = SlotWidget(slot.uuid, i, plugin_name)
+            slot_widget.clicked.connect(self._on_slot_clicked)
+            slot_widget.remove_requested.connect(self._on_remove_slot)
+            self.slot_widgets.append(slot_widget)
+            self.slots_container.addWidget(slot_widget)
+
+        # Update selection
+        if self.selected_slot_uuid and self.rig.get_slot(self.selected_slot_uuid):
+            self._select_slot(self.selected_slot_uuid)
+        elif self.rig.slots:
+            self._select_slot(self.rig.slots[0].uuid)
+        else:
+            self.selected_slot_uuid = None
+            self.controls_panel.set_plugin(None)
+
+    def _select_slot(self, slot_uuid: str):
         """Select a slot and show its controls."""
-        self.selected_slot = slot_id
+        self.selected_slot_uuid = slot_uuid
 
-        for i, sw in enumerate(self.slot_widgets):
-            sw.set_selected(i == slot_id)
+        for sw in self.slot_widgets:
+            sw.set_selected(sw.slot_uuid == slot_uuid)
 
-        slot = self.rig[slot_id]
-        self.controls_panel.set_plugin(slot.plugin)
+        slot = self.rig.get_slot(slot_uuid)
+        if slot:
+            self.controls_panel.set_plugin(slot.plugin)
+        else:
+            self.controls_panel.set_plugin(None)
 
-    def _on_slot_clicked(self, slot_id: int):
-        self._select_slot(slot_id)
+    def _on_slot_clicked(self, slot_uuid: str):
+        self._select_slot(slot_uuid)
 
-    def _on_load_requested(self, slot_id: int):
-        """Show plugin selector and load selected plugin."""
+    def _on_add_slot(self):
+        """Add a new slot with plugin."""
         dialog = PluginSelectorDialog(self.rig, self)
         if dialog.exec() == QDialog.Accepted and dialog.selected_uri:
-            self.rig[slot_id] = dialog.selected_uri
-            self._refresh_slots()
-            self._select_slot(slot_id)
+            try:
+                slot = self.rig.add_slot()
+                slot.load(dialog.selected_uri)
+                self.rig.reconnect()
+                self._rebuild_slot_widgets()
+                self._select_slot(slot.uuid)
+            except IndexError as e:
+                print(f"Cannot add slot: {e}")
+            except Exception as e:
+                print(f"Failed to load plugin: {e}")
 
-    def _on_clear_requested(self, slot_id: int):
-        """Clear the specified slot."""
-        self.rig[slot_id] = None
-        self._refresh_slots()
-        self._select_slot(slot_id)
+    def _on_remove_slot(self, slot_uuid: str):
+        """Remove the specified slot."""
+        slot = self.rig.get_slot(slot_uuid)
+        if slot:
+            self.rig.remove_slot(slot)
+            self._rebuild_slot_widgets()
 
     def _on_clear_all(self):
         """Clear all slots."""
         self.rig.clear()
-        self._refresh_slots()
-        self._select_slot(self.selected_slot)
+        self._rebuild_slot_widgets()
 
     # =========================================================================
     # WebSocket event handlers (thread-safe via Qt signals)
@@ -599,10 +619,10 @@ class MainWindow(QMainWindow):
     def _on_ws_param_changed(self, label: str, symbol: str, value: float):
         """Handle parameter change from WebSocket - update UI."""
         # Find which slot has this plugin
-        for i, slot in enumerate(self.rig.slots):
+        for slot in self.rig.slots:
             if slot.plugin and slot.plugin.label == label:
                 # If this is the selected slot, update control widget
-                if i == self.selected_slot and symbol in self.controls_panel.control_widgets:
+                if slot.uuid == self.selected_slot_uuid and symbol in self.controls_panel.control_widgets:
                     widget = self.controls_panel.control_widgets[symbol]
                     widget.set_value_silent(value)
                 break
@@ -610,10 +630,10 @@ class MainWindow(QMainWindow):
     def _on_ws_bypass_changed(self, label: str, bypassed: bool):
         """Handle bypass change from WebSocket - update UI."""
         # Find which slot has this plugin
-        for i, slot in enumerate(self.rig.slots):
+        for slot in self.rig.slots:
             if slot.plugin and slot.plugin.label == label:
                 # If this is the selected slot, update bypass checkbox
-                if i == self.selected_slot:
+                if slot.uuid == self.selected_slot_uuid:
                     self.controls_panel.set_bypass_silent(bypassed)
                 break
 
@@ -621,9 +641,7 @@ class MainWindow(QMainWindow):
         """Handle structural change from WebSocket - refresh UI."""
         print(f"⚠️ UI: Structural change: {msg_type}")
         # Refresh slots display - structure may have changed externally
-        self._refresh_slots()
-        # Re-select current slot to refresh controls panel
-        self._select_slot(self.selected_slot)
+        self._rebuild_slot_widgets()
 
     def closeEvent(self, event):
         """Викликається, коли користувач закриває вікно."""

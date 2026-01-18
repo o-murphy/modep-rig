@@ -30,7 +30,7 @@ url = "http://127.0.0.1:18181/"
 # outputs = ["playback_1", "playback_2"] # Hardware outputs (to audio interface)
 
 [rig]
-slot_count = 4              # Number of effect slots in chain
+slots_limit = 8             # Max slots allowed (optional, default: unlimited)
 
 # Supported plugins (whitelist)
 [[plugins]]
@@ -117,21 +117,28 @@ from modep_rig import Config, Rig
 config = Config.load("config.toml")
 rig = Rig(config)
 
-# Load plugin by name (from config)
-rig[0] = "DS1"
+# Add slot and load plugin
+slot = rig.add_slot()
+slot.load("http://moddevices.com/plugins/mod-devel/DS1")
+rig.reconnect()
 
-# Load plugin by URI
-rig[1] = "http://distrho.sf.net/plugins/MVerb"
-
-# Clear slot
-rig[0] = None
+# Or use index-based syntax (auto-creates slots)
+rig[0] = "DS1"       # by name from config
+rig[1] = "http://distrho.sf.net/plugins/MVerb"  # by URI
 
 # Access plugin controls
 plugin = rig[0].plugin
 plugin.set_control("gain", 0.5)
 
-# Bypass via WebSocket (real-time)
-rig.client.ws.effect_bypass("DS1_0", True)
+# Remove slot (unloads plugin and removes from chain)
+rig[0].unload()
+
+# Save/load presets
+rig.save_preset("my_preset.json")
+rig.load_preset("my_preset.json")
+
+# Clear all slots
+rig.clear()
 ```
 
 ## API
@@ -146,9 +153,15 @@ rig.client.ws.effect_bypass("DS1_0", True)
 
 ### Rig
 
-- `rig[n] = uri/name/None` - Load/unload plugin in slot
+- `rig.add_slot(position=None)` - Add new slot (at end or at position)
+- `rig.remove_slot(slot)` - Remove slot from rig
+- `rig.get_slot(uuid)` - Find slot by UUID
+- `rig[n] = uri/name` - Load plugin in slot (auto-creates if needed)
+- `rig[n].unload()` - Unload plugin and remove slot
 - `rig.reconnect()` - Rebuild audio connections
 - `rig.clear()` - Clear all slots
+- `rig.save_preset(path)` - Save rig state to JSON
+- `rig.load_preset(path)` - Load rig state from JSON
 
 ### Client (WebSocket)
 
