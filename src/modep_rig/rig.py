@@ -571,7 +571,8 @@ class Rig:
             self._ext_on_structural_change(msg_type, raw_message)
 
     def __del__(self):
-        self.client.reset()
+        # Clear all slots using make-before-break
+        self.clear()
 
     @suppress_structural
     def __setitem__(self, key: SupportsIndex, value: str | PluginConfig | None) -> None:
@@ -909,11 +910,19 @@ class Rig:
 
     @suppress_structural
     def clear(self):
-        """Очищає та видаляє всі слоти"""
-        for slot in list(self.slots):
-            slot._unload_internal()
-        self.slots.clear()
-        self.reconnect()
+        """Очищає та видаляє всі слоти послідовно (make-before-break).
+        
+        Видаляє слоти один за одним, дотримуючись алгоритму make-before-break:
+        кожен слот підключає своїх сусідів напряму перед тим як видалитися.
+        """
+        # Видаляємо слоти послідовно з кінця в початок
+        # Це гарантує, що ланцюг залишається з'єднаним при видаленні
+        while self.slots:
+            slot = self.slots[-1]  # Видаляємо останній слот
+            if not slot.is_empty:
+                slot.unload()  # unload() роз'єднує сусідів та видаляє слот
+            else:
+                self.slots.remove(slot)  # Просто видаляємо порожній слот
 
     def list_available_plugins(self) -> list[PluginConfig]:
         """Повертає список плагінів з конфігурації"""
