@@ -117,21 +117,24 @@ from modep_rig import Config, Rig
 config = Config.load("config.toml")
 rig = Rig(config)
 
-# Add slot and load plugin
+# Add empty slot
 slot = rig.add_slot()
-slot.load("http://moddevices.com/plugins/mod-devel/DS1")
-rig.reconnect()
 
-# Or use index-based syntax (auto-creates slots)
-rig[0] = "DS1"       # by name from config
-rig[1] = "http://distrho.sf.net/plugins/MVerb"  # by URI
+# Load plugin into empty slot (auto-connects)
+slot.load_and_connect("http://moddevices.com/plugins/mod-devel/DS1")
+
+# Replace plugin in occupied slot (make-before-break: no audio interruption)
+slot.replace("http://distrho.sf.net/plugins/MVerb")
+
+# Unload plugin but keep empty slot
+slot.unload_plugin()
+
+# Remove slot entirely (connects neighbors first for seamless transition)
+slot.unload()
 
 # Access plugin controls
 plugin = rig[0].plugin
 plugin.set_control("gain", 0.5)
-
-# Remove slot (unloads plugin and removes from chain)
-rig[0].unload()
 
 # Save/load presets
 rig.save_preset("my_preset.json")
@@ -140,6 +143,17 @@ rig.load_preset("my_preset.json")
 # Clear all slots
 rig.clear()
 ```
+
+## Make-Before-Break Plugin Switching
+
+The rig implements seamless plugin switching without audio interruption:
+
+- **`slot.load_and_connect(uri)`** - Load plugin into empty slot with automatic connection
+- **`slot.replace(uri)`** - Replace plugin with new one: loads new, connects new, removes old
+- **`slot.unload_plugin()`** - Remove plugin only, keep empty slot
+- **`slot.unload()`** - Remove entire slot, connecting neighbors directly for seamless transition
+
+This ensures smooth audio flow without gaps or artifacts.
 
 ## API
 
@@ -153,15 +167,24 @@ rig.clear()
 
 ### Rig
 
-- `rig.add_slot(position=None)` - Add new slot (at end or at position)
-- `rig.remove_slot(slot)` - Remove slot from rig
+- `rig.add_slot(position=None)` - Add new empty slot
+- `rig.remove_slot(slot)` - Remove slot from rig (use Slot.unload() instead)
 - `rig.get_slot(uuid)` - Find slot by UUID
-- `rig[n] = uri/name` - Load plugin in slot (auto-creates if needed)
-- `rig[n].unload()` - Unload plugin and remove slot
-- `rig.reconnect()` - Rebuild audio connections
 - `rig.clear()` - Clear all slots
 - `rig.save_preset(path)` - Save rig state to JSON
 - `rig.load_preset(path)` - Load rig state from JSON
+- `rig._reconnect_slot(slot)` - Partial reconnection for single slot (internal, used by make-before-break)
+
+### Slot
+
+- `slot.load(uri)` - Load plugin (removes old first, no auto-connect)
+- `slot.load_and_connect(uri)` - Load plugin into empty slot with automatic connection
+- `slot.load_by_name(name)` - Load plugin by name from config
+- `slot.replace(uri)` - Replace plugin using make-before-break (new connects BEFORE old removes)
+- `slot.unload()` - Remove entire slot, connects neighbors first for seamless transition
+- `slot.unload_plugin()` - Remove plugin only, keep empty slot for later loading
+- `slot.is_empty` - Check if slot has no plugin
+- `slot.index` - Get slot position in rig
 
 ### Client (WebSocket)
 

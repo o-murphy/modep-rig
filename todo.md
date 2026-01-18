@@ -1,9 +1,25 @@
 now
-* make plugin switch with no full rig reconnect ("Make-before-break") - new plugin loaded first, then old removed
-  * We have to guarantee path through so that the sound is not interrupted.
-  * On add plugin - firstly add it to the rig - connect to the chain - if success - remove old connection between it's neighbours
-  * On remove plugin - connect it's neghbours and only then remove the plugin
-  * On replace (Slot.load) - load new plugin, connect it - if success - remove old plugin
+* ~~make plugin switch with no full rig reconnect ("Make-before-break") - new plugin loaded first, then old removed~~ ✓ DONE
+  * ~~We have to guarantee path through so that the sound is not interrupted.~~ ✓
+  * ~~On add plugin - firstly add it to the rig - connect to the chain - if success - remove old connection between it's neighbours~~ ✓
+  * ~~On remove plugin - connect it's neghbours and only then remove the plugin~~ ✓
+  * ~~On replace (Slot.load) - load new plugin, connect it - if success - remove old plugin~~ ✓
+  * ~~Fixed rig_ui.py integration - uses _reconnect_slot() instead of reconnect()~~ ✓
+  * ~~Add Load button to ControlsPanel for empty slots~~ ✓
+  * ~~Add Replace button to ControlsPanel for filled slots~~ ✓
+  * ~~Implement Slot.load_and_connect() for loading plugins into empty slots~~ ✓
+  * ~~Implement Slot.replace() with make-before-break semantics~~ ✓
+  
+  Implementation complete:
+  - Method `Slot.load(uri)`: loads plugin (remove old first, no reconnect)
+  - Method `Slot.load_and_connect(uri)`: loads plugin into empty slot and connects
+  - Method `Slot.replace(uri)`: make-before-break replace (load new, connect new, remove old)
+  - Method `Slot.unload()`: removes entire slot (connect neighbors first)
+  - Method `Slot.unload_plugin()`: removes plugin only, keeps empty slot
+  - Method `Rig._reconnect_slot(slot)`: partial reconnection for single slot with @suppress_structural
+  - Method `Rig._disconnect_pair(src, dst)`: disconnect specific route pairs
+  - Updated `rig_ui.py ControlsPanel`: shows Load button for empty slots, Replace button for filled slots
+  - Updated `rig_ui.py MainWindow`: handlers for load_plugin_requested and replace_plugin_requested signals
 * saving/restoring rig state to/from JSON is not comletely done, not tested, we have to comlete it. 
   * do we able to use .pedalboard files?
   * should we first make a server state syncing?

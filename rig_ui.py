@@ -31,8 +31,10 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QDialogButtonBox,
+    QMenu,
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QObject
+from PySide6.QtGui import QCursor
 
 from modep_rig import Config, Rig, ControlPort
 
@@ -356,6 +358,9 @@ class SlotWidget(QFrame):
 class ControlsPanel(QScrollArea):
     """Panel showing controls for selected plugin."""
 
+    replace_plugin_requested = Signal(str)  # slot_uuid
+    load_plugin_requested = Signal(str)  # slot_uuid
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWidgetResizable(True)
@@ -367,6 +372,7 @@ class ControlsPanel(QScrollArea):
         self.setWidget(self.container)
 
         self.plugin = None
+        self.current_slot_uuid: str | None = None
         self.control_widgets: dict[str, ControlWidget] = {}
         self.bypass_checkbox: QCheckBox | None = None
         self._updating_bypass = False
@@ -376,14 +382,25 @@ class ControlsPanel(QScrollArea):
         self.placeholder.setAlignment(Qt.AlignCenter)
         self.layout.addWidget(self.placeholder)
 
-    def set_plugin(self, plugin):
+    def set_plugin(self, plugin, slot_uuid: str | None = None):
         """Set the plugin to display controls for."""
         # Clear existing
         self._clear_controls()
         self.plugin = plugin
+        self.current_slot_uuid = slot_uuid
 
         if plugin is None:
-            self.placeholder.show()
+            # Show Load button for empty slots
+            if slot_uuid:
+                self.placeholder.setText("Empty Slot")
+                self.placeholder.show()
+                
+                load_btn = QPushButton("Load Plugin")
+                load_btn.clicked.connect(self._on_load_clicked)
+                self.layout.insertWidget(0, load_btn)
+            else:
+                self.placeholder.setText("Select a slot")
+                self.placeholder.show()
             return
 
         self.placeholder.hide()
@@ -399,6 +416,12 @@ class ControlsPanel(QScrollArea):
         self.bypass_checkbox.setChecked(bypassed)
         self.bypass_checkbox.toggled.connect(self._on_bypass_changed)
         header.addWidget(self.bypass_checkbox)
+        
+        # Replace button
+        replace_btn = QPushButton("Replace")
+        replace_btn.clicked.connect(self._on_replace_clicked)
+        header.addWidget(replace_btn)
+        
         header.addStretch()
 
         self.layout.addLayout(header)
@@ -429,6 +452,16 @@ class ControlsPanel(QScrollArea):
 
         self.layout.addWidget(controls_group)
         self.layout.addStretch()
+
+    def _on_replace_clicked(self):
+        """Emit signal to replace current plugin."""
+        if self.current_slot_uuid:
+            self.replace_plugin_requested.emit(self.current_slot_uuid)
+
+    def _on_load_clicked(self):
+        """Emit signal to load plugin in empty slot."""
+        if self.current_slot_uuid:
+            self.load_plugin_requested.emit(self.current_slot_uuid)
 
     def _clear_controls(self):
         """Remove all control widgets."""
@@ -533,6 +566,8 @@ class MainWindow(QMainWindow):
         # Right side - controls panel
         self.controls_panel = ControlsPanel()
         self.controls_panel.setMinimumWidth(500)
+        self.controls_panel.replace_plugin_requested.connect(self._on_replace_plugin_requested)
+        self.controls_panel.load_plugin_requested.connect(self._on_load_plugin_requested)
         main_layout.addWidget(self.controls_panel, stretch=1)
 
         # Initial state - rebuild slot widgets
@@ -578,34 +613,92 @@ class MainWindow(QMainWindow):
 
         slot = self.rig.get_slot(slot_uuid)
         if slot:
-            self.controls_panel.set_plugin(slot.plugin)
+            self.controls_panel.set_plugin(slot.plugin, slot_uuid)
         else:
             self.controls_panel.set_plugin(None)
 
     def _on_slot_clicked(self, slot_uuid: str):
+        """Handle slot click - select it, double-click to replace plugin."""
+        slot = self.rig.get_slot(slot_uuid)
+        
+        # Check if this is a double-click on an occupied slot
+        # (we'll implement via button instead)
         self._select_slot(slot_uuid)
 
     def _on_add_slot(self):
-        """Add a new slot with plugin."""
-        dialog = PluginSelectorDialog(self.rig, self)
-        if dialog.exec() == QDialog.Accepted and dialog.selected_uri:
+        """Add a new slot with optional plugin."""
+        # Show menu with options
+        menu = QMenu()
+        empty_action = menu.addAction("Add Empty Slot")
+        plugin_action = menu.addAction("Add Slot with Plugin")
+        
+        action = menu.exec(QCursor.pos())
+        
+        if action == empty_action:
             try:
                 slot = self.rig.add_slot()
-                slot.load(dialog.selected_uri)
-                self.rig.reconnect()
                 self._rebuild_slot_widgets()
                 self._select_slot(slot.uuid)
             except IndexError as e:
                 print(f"Cannot add slot: {e}")
-            except Exception as e:
-                print(f"Failed to load plugin: {e}")
+        
+        elif action == plugin_action:
+            dialog = PluginSelectorDialog(self.rig, self)
+            if dialog.exec() == QDialog.Accepted and dialog.selected_uri:
+                try:
+                    slot = self.rig.add_slot()
+                    # Use load_and_connect for empty slots
+                    slot.load_and_connect(dialog.selected_uri)
+                    self._rebuild_slot_widgets()
+                    self._select_slot(slot.uuid)
+                except IndexError as e:
+                    print(f"Cannot add slot: {e}")
+                except Exception as e:
+                    print(f"Failed to load plugin: {e}")
 
     def _on_remove_slot(self, slot_uuid: str):
         """Remove the specified slot."""
         slot = self.rig.get_slot(slot_uuid)
         if slot:
-            self.rig.remove_slot(slot)
-            self._rebuild_slot_widgets()
+            # Show context menu with options
+            menu = QMenu()
+            unload_action = menu.addAction("Unload Plugin (Keep Slot)")
+            remove_action = menu.addAction("Remove Slot")
+            
+            action = menu.exec(QCursor.pos())
+            
+            if action == unload_action:
+                slot.unload_plugin()
+                self._rebuild_slot_widgets()
+            elif action == remove_action:
+                self.rig.remove_slot(slot)
+                self._rebuild_slot_widgets()
+
+    def _on_replace_plugin_requested(self, slot_uuid: str):
+        """Replace plugin in the specified slot."""
+        slot = self.rig.get_slot(slot_uuid)
+        if slot and not slot.is_empty:
+            dialog = PluginSelectorDialog(self.rig, self)
+            if dialog.exec() == QDialog.Accepted and dialog.selected_uri:
+                try:
+                    slot.replace(dialog.selected_uri)
+                    self._rebuild_slot_widgets()
+                    self._select_slot(slot.uuid)
+                except Exception as e:
+                    print(f"Failed to replace plugin: {e}")
+
+    def _on_load_plugin_requested(self, slot_uuid: str):
+        """Load plugin in empty slot."""
+        slot = self.rig.get_slot(slot_uuid)
+        if slot and slot.is_empty:
+            dialog = PluginSelectorDialog(self.rig, self)
+            if dialog.exec() == QDialog.Accepted and dialog.selected_uri:
+                try:
+                    slot.load_and_connect(dialog.selected_uri)
+                    self._rebuild_slot_widgets()
+                    self._select_slot(slot.uuid)
+                except Exception as e:
+                    print(f"Failed to load plugin: {e}")
 
     def _on_clear_all(self):
         """Clear all slots."""

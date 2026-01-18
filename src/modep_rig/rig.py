@@ -153,19 +153,235 @@ class Slot:
             raise ValueError(f"Plugin '{name}' not found in config")
         return self.load(plugin_config.uri, x, y)
 
+    def load_and_connect(self, uri: str, x: int = 500, y: int = 400) -> Plugin:
+        """
+        Завантажує плагін і підключає його (для порожних слотів).
+        
+        Для порожних слотів: load() + _reconnect_slot()
+        Для заповнених слотів: це не варто використовувати, краще replace()
+        """
+        if not self.is_empty:
+            raise ValueError(f"Slot {self.uuid} is not empty, use replace() instead")
+        
+        # Завантажити плагін
+        plugin = self.load(uri, x, y)
+        
+        # Підключити до ланцюга
+        try:
+            self.rig._reconnect_slot(self)
+        except Exception as e:
+            # Якщо щось пішло не так - видаляємо плагін
+            self._unload_internal()
+            raise Exception(f"Failed to connect plugin: {e}")
+        
+        return plugin
+
     def unload(self):
-        """Вивантажує плагін, видаляє слот з рігу і запускає reconnect"""
-        self._unload_internal()
-        # Remove empty slot from rig
+        """
+        Make-before-break: вивантажує плагін безперебійно.
+        
+        Алгоритм:
+        1. З'єднати сусідні слоти напряму (src -> dst) 
+        2. Видалити цей слот
+        3. Видалити плагін з сервера
+        """
+        slot_idx = self.index
+        if slot_idx < 0:
+            print(f"Slot {self.uuid} is not in rig")
+            return
+        
+        # Знаходимо попередній слот
+        src = self.rig.input_slot
+        for s in self.rig.slots[:slot_idx]:
+            if not s.is_empty:
+                src = s
+        
+        # Знаходимо наступний слот
+        dst = self.rig.output_slot
+        for s in self.rig.slots[slot_idx + 1:]:
+            if not s.is_empty:
+                dst = s
+                break
+        
+        print(f"Make-before-break unload: connecting neighbors {repr(src)} -> {repr(dst)}")
+        
+        # Крок 1: підключити сусідів напряму (перш ніж видаляти цей слот)
+        try:
+            self.rig._connect_pair(src, dst)
+        except Exception as e:
+            print(f"  ⚠️ Warning: Failed to connect neighbors: {e}")
+            # Все ж видаляємо цей слот
+        
+        # Крок 2: видалити слот з рігу
         if self in self.rig.slots:
             self.rig.slots.remove(self)
-        self.rig.reconnect()
+        
+        # Крок 3: видалити плагін з сервера
+        self._unload_internal()
+        
+        print(f"Make-before-break unload complete")
+
+    def unload_plugin(self):
+        """
+        Make-before-break: вивантажує плагін БЕЗ видалення слота.
+        
+        Слот залишається в ланцюгу (тепер порожній), сусідні слоти підключуються напряму.
+        """
+        if self.is_empty:
+            print(f"Slot {self.uuid} is already empty")
+            return
+        
+        slot_idx = self.index
+        if slot_idx < 0:
+            print(f"Slot {self.uuid} is not in rig")
+            return
+        
+        # Знаходимо попередній слот
+        src = self.rig.input_slot
+        for s in self.rig.slots[:slot_idx]:
+            if not s.is_empty:
+                src = s
+        
+        # Знаходимо наступний слот
+        dst = self.rig.output_slot
+        for s in self.rig.slots[slot_idx + 1:]:
+            if not s.is_empty:
+                dst = s
+                break
+        
+        print(f"Make-before-break unload plugin: connecting neighbors {repr(src)} -> {repr(dst)}")
+        
+        # Крок 1: підключити сусідів напряму (перш ніж видаляти цей плагін)
+        try:
+            self.rig._connect_pair(src, dst)
+        except Exception as e:
+            print(f"  ⚠️ Warning: Failed to connect neighbors: {e}")
+        
+        # Крок 2: видалити плагін з сервера
+        self._unload_internal()
+        
+        print(f"Make-before-break unload plugin complete, slot {self.uuid} now empty")
 
     def _unload_internal(self):
         """Вивантажує плагін БЕЗ reconnect"""
         if self.plugin:
             self.rig.client.effect_remove(self.plugin.label)
             self.plugin = None
+
+    def replace(self, uri: str, x: int = 500, y: int = 400) -> Plugin:
+        """
+        Make-before-break: замінює плагін без перебійних звуків.
+        
+        Алгоритм:
+        1. Завантажити новий плагін в тимчасовий слот
+        2. Підключити його до ланцюга (він тепер звучить)
+        3. Видалити старий плагін (звук продовжується через новий)
+        
+        Args:
+            uri: URI новог плагіна
+            x, y: позиція на UI
+            
+        Returns:
+            Новий плагін
+            
+        Raises:
+            ValueError: Якщо плагін не підтримується
+            Exception: Якщо щось пішло не так при завантаженні
+        """
+        old_plugin = self.plugin
+        old_label = old_plugin.label if old_plugin else None
+        
+        # Крок 1: завантажити новий плагін (БЕЗ видалення старого)
+        new_plugin = self._load_internal(uri, x, y)
+        
+        try:
+            # Крок 2: підключити новий плагін до ланцюга
+            self.rig._reconnect_slot(self)
+            print(f"  Make-before-break: new plugin connected")
+        except Exception as e:
+            # Якщо щось пішло не так при підключенні нового - відкатуємо
+            self.rig.client.effect_remove(new_plugin.label)
+            self.plugin = old_plugin
+            raise Exception(f"Failed to connect new plugin: {e}")
+        
+        # Крок 3: видалити старий плагін (звук продовжується через новий)
+        if old_label:
+            try:
+                self.rig.client.effect_remove(old_label)
+                print(f"  Make-before-break: old plugin removed")
+            except Exception as e:
+                print(f"  ⚠️ Warning: Failed to remove old plugin {old_label}: {e}")
+        
+        return new_plugin
+
+    def _load_internal(self, uri: str, x: int = 500, y: int = 400) -> Plugin:
+        """
+        Завантажує плагін без видалення попереднього (для make-before-break).
+        Це внутрішній метод для підтримки replace().
+        """
+        # Перевіряємо чи плагін підтримується
+        plugin_config = self.rig.config.get_plugin_by_uri(uri)
+        if not plugin_config:
+            raise ValueError(f"Plugin not supported: {uri}")
+
+        # НЕ видаляємо старий плагін
+        # self._unload_internal()
+
+        base_label = self._label_from_uri(uri)
+        label = f"{base_label}_{self.uuid}"
+
+        result = self.rig.client.effect_add(label, uri, x * (self.index + 1), y)
+
+        if not result or not isinstance(result, dict) or not result.get("valid"):
+            raise Exception(f"Failed to load plugin: {uri}")
+
+        audio = result.get("ports", {}).get("audio", {})
+
+        # Отримуємо всі порти з результату
+        all_inputs = [
+            Port(
+                symbol=p["symbol"], name=p["name"], graph_path=f"{label}/{p['symbol']}"
+            )
+            for p in audio.get("input", [])
+        ]
+
+        all_outputs = [
+            Port(
+                symbol=p["symbol"], name=p["name"], graph_path=f"{label}/{p['symbol']}"
+            )
+            for p in audio.get("output", [])
+        ]
+
+        # Застосовуємо override якщо є в конфізі
+        if plugin_config.inputs is not None:
+            inputs = [p for p in all_inputs if p.symbol in plugin_config.inputs]
+        else:
+            inputs = all_inputs
+
+        if plugin_config.outputs is not None:
+            outputs = [p for p in all_outputs if p.symbol in plugin_config.outputs]
+        else:
+            outputs = all_outputs
+
+        plugin = Plugin(
+            slot=self,
+            uri=uri,
+            label=label,
+            name=result.get("name", base_label),
+            inputs=inputs,
+            outputs=outputs,
+        )
+
+        # Load control metadata
+        effect_data = self.rig.client.effect_get(uri)
+        if effect_data:
+            plugin._load_controls(effect_data)
+
+        # Встановлюємо новий плагін
+        self.plugin = plugin
+        
+        print(f"LOADED (no unload) [{self.index}] {self.uuid}: {label}")
+        return plugin
 
     @staticmethod
     def _label_from_uri(uri: str) -> str:
@@ -375,16 +591,38 @@ class Rig:
                 raise IndexError(f"Cannot add more slots: limit is {self.config.rig.slots_limit}")
             self.add_slot()
 
+        slot = self.slots[idx]
+
         if value is None:
-            self.slots[idx]._unload_internal()
-        elif isinstance(value, PluginConfig):
-            self.slots[idx].load(value.uri)
-        elif value.startswith("http://") or value.startswith("https://"):
-            self.slots[idx].load(value)
+            # Очистити слот - вивантажити плагін (make-before-break)
+            if not slot.is_empty:
+                slot.unload()
         else:
-            # Припускаємо, що це ім'я плагіна
-            self.slots[idx].load_by_name(value)
-        self.reconnect()
+            # Завантажити новий плагін
+            if isinstance(value, PluginConfig):
+                uri = value.uri
+            elif value.startswith("http://") or value.startswith("https://"):
+                uri = value
+            else:
+                # Припускаємо, що це ім'я плагіна
+                plugin_config = self.config.get_plugin_by_name(value)
+                if not plugin_config:
+                    raise ValueError(f"Plugin '{value}' not found in config")
+                uri = plugin_config.uri
+            
+            # Використовуємо make-before-break при заміні
+            if not slot.is_empty:
+                slot.replace(uri)
+            else:
+                # Слот порожній - завантажити і переконектити
+                slot.load(uri)
+                # Часткова ребудова для нового слота
+                try:
+                    self._reconnect_slot(slot)
+                except Exception as e:
+                    print(f"Failed to reconnect slot: {e}")
+                    # Якщо щось пішло не так - видаляємо плагін
+                    slot._unload_internal()
 
     def __getitem__(self, key: SupportsIndex) -> Slot:
         return self.slots[key]
@@ -420,7 +658,7 @@ class Rig:
 
     @suppress_structural
     def remove_slot(self, slot: Slot) -> bool:
-        """Видаляє слот.
+        """Видаляє слот з make-before-break.
 
         Args:
             slot: Слот для видалення.
@@ -429,9 +667,8 @@ class Rig:
             True якщо слот було видалено.
         """
         if slot in self.slots:
-            slot._unload_internal()
-            self.slots.remove(slot)
-            self.reconnect()
+            # Use make-before-break unload (connects neighbors first)
+            slot.unload()
             return True
         return False
 
@@ -469,6 +706,113 @@ class Rig:
             self._connect_pair(src, dst)
 
         print("=== RECONNECT DONE ===\n")
+
+    @suppress_structural
+    def _reconnect_slot(self, slot: Slot):
+        """
+        Make-before-break: перепідключує окремий слот при його заміні.
+        
+        Підключає попередній і наступний слоти до даного без розривання всіх з'єднань.
+        
+        Алгоритм:
+        1. Підключити новий слот у ланцюг (звук вже йде через нього)
+        2. Роз'єднати старий шлях (звук продовжується через новий)
+        
+        Args:
+            slot: Слот який потрібно перепідключити
+            
+        Raises:
+            ValueError: Якщо слот не знайдено в ланцюгу
+        """
+        slot_idx = slot.index
+        if slot_idx < 0:
+            raise ValueError(f"Slot {slot.uuid} not found in rig")
+        
+        # Побудуємо ланцюг для з'єднання
+        if slot_idx == 0:
+            src = self.input_slot
+        else:
+            prev_slot = None
+            for s in self.slots[:slot_idx]:
+                if not s.is_empty:
+                    prev_slot = s
+            src = prev_slot or self.input_slot
+        
+        # Знаходимо наступний непустий слот
+        dst = None
+        for s in self.slots[slot_idx + 1:]:
+            if not s.is_empty:
+                dst = s
+                break
+        dst = dst or self.output_slot
+        
+        # Крок 1: Підключаємо новий слот у ланцюг (звук вже йде через нього)
+        print(f"  Connect incoming: {repr(src)} -> {repr(slot)}")
+        self._connect_pair(src, slot)
+        
+        print(f"  Connect outgoing: {repr(slot)} -> {repr(dst)}")
+        self._connect_pair(slot, dst)
+        
+        # Крок 2: Роз'єднуємо старий зв'язок src -> dst (звук продовжується через новий слот)
+        print(f"  Disconnect old path: {repr(src)} -> {repr(dst)}")
+        self._disconnect_pair(src, dst)
+
+    def _disconnect_slot_connections(self, slot: Slot):
+        """Роз'єднує всі з'єднання входів та виходів конкретного слота"""
+        inputs = slot.inputs
+        outputs = slot.outputs
+        
+        # Знаходимо всі можливі джерела та призначення
+        all_src_outputs = []
+        all_dst_inputs = []
+        
+        # Всі виходи які можуть підключатися до входів цього слота
+        all_src_outputs.extend(self.input_slot.outputs)
+        for s in self.slots:
+            if s != slot and not s.is_empty:
+                all_src_outputs.extend(s.outputs)
+        
+        # Всі входи яких цей слот може живити
+        for s in self.slots:
+            if s != slot and not s.is_empty:
+                all_dst_inputs.extend(s.inputs)
+        all_dst_inputs.extend(self.output_slot.hw_inputs)
+        
+        # Роз'єднуємо вхід цього слота з усіма джерелами
+        for out in all_src_outputs:
+            for inp in inputs:
+                try:
+                    self.client.effect_disconnect(out, inp)
+                except Exception:
+                    pass
+        
+        # Роз'єднуємо вихід цього слота з усіма призначеннями
+        for out in outputs:
+            for inp in all_dst_inputs:
+                try:
+                    self.client.effect_disconnect(out, inp)
+                except Exception:
+                    pass
+
+    def _disconnect_pair(self, src: Slot, dst: Slot):
+        """Роз'єднує конкретний зв'язок src -> dst"""
+        outputs = src.outputs
+        
+        if isinstance(dst, HardwareSlot):
+            inputs = dst.hw_inputs
+        else:
+            inputs = dst.inputs
+        
+        if not outputs or not inputs:
+            return
+        
+        # Роз'єднуємо всі можливі комбінації портів між src та dst
+        for out in outputs:
+            for inp in inputs:
+                try:
+                    self.client.effect_disconnect(out, inp)
+                except Exception:
+                    pass
 
     def _connect_pair(self, src: Slot, dst: Slot):
         """З'єднує src -> dst попарно по індексах.
