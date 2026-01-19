@@ -147,6 +147,9 @@ class Rig:
         self._label_counter = 0
         # Pending inserts mapping: label -> desired insert index (used for replace)
         self._pending_inserts: dict[str, int] = {}
+        
+        # Flag to defer reconnections during initial pedalboard loading
+        self._initializing = True
 
         # External callbacks (for UI)
         self._ext_on_param_change: OnParamChangeCallback | None = None
@@ -173,6 +176,18 @@ class Rig:
             # ignore and proceed; connect may have already been started elsewhere
             pass
 
+        # Wait for the initial pedalboard to load (loading_end message)
+        # This ensures we don't return before receiving all initial plugin/connection messages
+        print("Waiting for WebSocket pedalboard ready signal...")
+        self.client.ws.wait_pedalboard_ready(timeout=10.0)
+        
+        # Initialization complete - reconnections will now happen normally
+        self._initializing = False
+        # Do final reconnect if we have any slots
+        if self.slots:
+            print("Performing final reconnect after loading...")
+            self.reconnect()
+
         # By default we perform an initial reset and rebuild (preserves previous behaviour).
         # If `reset_on_init` is False, we skip calling `client.reset()` and `reconnect()` so
         # the local `Rig` state will be built reactively from WebSocket `add`/`remove`
@@ -184,7 +199,7 @@ class Rig:
             self.client.reset()
             self.reconnect()
         else:
-            print("Rig: skipping initial reset; waiting for WebSocket to populate state")
+            print("Rig initialization complete")
 
     def _resolve_hardware_ports(self) -> tuple[list[str], list[str]]:
         """Resolve hardware ports from config or auto-detect from MOD-UI."""
@@ -431,32 +446,26 @@ class Rig:
         slot = Slot(self, plugin)
         plugin.slot = slot
 
-        # Determine insert index: use pending_inserts (client-requested), else use x coordinate from UI, else append
+        # Determine insert index: use pending_inserts (client-requested), else append to preserve server order
         desired_idx = None
         if label in self._pending_inserts:
+            # Client explicitly requested a position (via request_add_plugin_at or replace)
             desired_idx = self._pending_inserts.pop(label)
-        elif x is not None:
-            # find first slot with ui_x greater than x
-            insert_at = len(self.slots)
-            for i, s in enumerate(self.slots):
-                sx = getattr(s.plugin, "ui_x", None)
-                if sx is None:
-                    continue
-                if sx > x:
-                    insert_at = i
-                    break
-            desired_idx = insert_at
-
-        if desired_idx is None:
-            # append to end
-            self.slots.append(slot)
+            print(f"  Using pending insert index: {desired_idx}")
         else:
-            if desired_idx < 0:
-                desired_idx = 0
-            if desired_idx > len(self.slots):
-                desired_idx = len(self.slots)
-            self.slots.insert(desired_idx, slot)
-        print(f"  Created slot: {slot}")
+            # No client request - append to end to preserve server's ordering
+            # (server sends plugins in the order they should appear)
+            print(f"  Appending to preserve server order")
+            desired_idx = len(self.slots)
+        
+        # Clamp index to valid range
+        if desired_idx < 0:
+            desired_idx = 0
+        if desired_idx > len(self.slots):
+            desired_idx = len(self.slots)
+        
+        self.slots.insert(desired_idx, slot)
+        print(f"  Created slot: {slot} at index {desired_idx}")
 
         # Store UI position on plugin for future ordering
         if x is not None:
@@ -464,8 +473,11 @@ class Rig:
         if y is not None:
             slot.plugin.ui_y = y
 
-        # Підключаємо до ланцюга
-        self._reconnect_slot(slot)
+        # Connect into chain UNLESS we're still initializing (in which case we'll do one final reconnect)
+        if self._initializing:
+            print(f"  Skipping reconnect during initialization (will do final reconnect after loading)")
+        else:
+            self._reconnect_slot(slot)
 
         # If there was a pending insert index for this label (replace behavior) we already handled it above
 
@@ -501,9 +513,10 @@ class Rig:
             dst = s
             break
 
-        # Підключаємо сусідів напряму
-        print(f"  Connecting neighbors: {src} -> {dst}")
-        self._connect_pair(src, dst)
+        # Reconnect neighbors UNLESS we're still initializing
+        if not self._initializing:
+            print(f"  Connecting neighbors: {src} -> {dst}")
+            self._connect_pair(src, dst)
 
         # Видаляємо слот
         self.slots.remove(slot)

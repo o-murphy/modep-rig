@@ -59,6 +59,8 @@ class WsClient:
         self._hw_audio_outputs: list[str] = []
         self._hw_ready = threading.Event()
         self._connected = threading.Event()
+        # Signals when initial pedalboard load is complete (loading_end received)
+        self._pedalboard_ready = threading.Event()
 
     def set_callbacks(
         self,
@@ -83,6 +85,7 @@ class WsClient:
         self._hw_audio_inputs.clear()
         self._hw_audio_outputs.clear()
         self._hw_ready.clear()
+        self._pedalboard_ready.clear()
         self._connected.set()
 
     def on_message(self, ws, message: str):
@@ -126,6 +129,9 @@ class WsClient:
             if not self._hw_ready.is_set():
                 self._hw_ready.set()
                 print(f"WS << Hardware ports ready: inputs={self._hw_audio_inputs}, outputs={self._hw_audio_outputs}")
+            if not self._pedalboard_ready.is_set():
+                self._pedalboard_ready.set()
+                print(f"WS << Pedalboard loading complete")
             return
 
         # Structural changes - plugins, connections, pedalboard
@@ -256,6 +262,22 @@ class WsClient:
             print(f"⚠️ Hardware ports not ready after {timeout}s, using discovered so far")
 
         return list(self._hw_audio_inputs), list(self._hw_audio_outputs)
+
+    def wait_pedalboard_ready(self, timeout: float = 10.0) -> bool:
+        """Wait for pedalboard loading to complete (loading_end message).
+
+        Args:
+            timeout: Max time to wait (seconds)
+
+        Returns:
+            True if pedalboard ready, False if timeout
+        """
+        if self._pedalboard_ready.wait(timeout):
+            print("✓ Pedalboard ready")
+            return True
+        else:
+            print(f"⚠️ Pedalboard not ready after {timeout}s, proceeding anyway")
+            return False
 
     @property
     def hw_inputs(self) -> list[str]:
