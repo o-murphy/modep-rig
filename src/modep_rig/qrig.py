@@ -33,7 +33,6 @@ from PySide6.QtWidgets import (
     QMenu,
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QObject
-from PySide6.QtGui import QCursor
 
 from modep_rig import Config, Rig, ControlPort
 from modep_rig.rig import Slot

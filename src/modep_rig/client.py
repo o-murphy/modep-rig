@@ -366,9 +366,6 @@ class Client:
     def _load_effects_list(self):
         data = self._request("/effect/list")
         self.effects_list = data if isinstance(data, list) else []
-        import json
-        with open("plugins.json", "w") as fp:
-            json.dump(data, fp)
 
     def _request(self, path: str, **kwargs):
         url = self.base_url + path

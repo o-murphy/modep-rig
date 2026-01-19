@@ -359,6 +359,51 @@ class Rig:
             # Full pedalboard change - rebuild everything
             self._on_pedalboard_reset()
 
+    def _load_plugin_ports(self, label: str, uri: str, effect_data: dict) -> tuple[list[Port], list[Port]]:
+        """Load and filter plugin ports from effect data.
+
+        Args:
+            label: Plugin label for graph paths
+            uri: Plugin URI for config lookup
+            effect_data: Data from effect_get API
+
+        Returns:
+            Tuple of (inputs, outputs) Port lists
+        """
+        # Parse all ports from effect data
+        all_inputs = []
+        all_outputs = []
+
+        ports = effect_data.get("ports", {})
+        audio_ports = ports.get("audio", {})
+
+        for p in audio_ports.get("input", []):
+            all_inputs.append(Port(
+                symbol=p["symbol"],
+                name=p.get("name", p["symbol"]),
+                graph_path=f"{label}/{p['symbol']}"
+            ))
+        for p in audio_ports.get("output", []):
+            all_outputs.append(Port(
+                symbol=p["symbol"],
+                name=p.get("name", p["symbol"]),
+                graph_path=f"{label}/{p['symbol']}"
+            ))
+
+        # Apply port overrides from config
+        plugin_config = self.config.get_plugin_by_uri(uri)
+        if plugin_config and plugin_config.inputs is not None:
+            inputs = [p for p in all_inputs if p.symbol in plugin_config.inputs]
+        else:
+            inputs = all_inputs
+
+        if plugin_config and plugin_config.outputs is not None:
+            outputs = [p for p in all_outputs if p.symbol in plugin_config.outputs]
+        else:
+            outputs = all_outputs
+
+        return inputs, outputs
+
     def _on_plugin_added(self, label: str, uri: str, x: float | None = None, y: float | None = None):
         """
         Handle plugin added via WebSocket feedback.
@@ -368,44 +413,15 @@ class Rig:
         # Перевіряємо чи такий слот вже існує
         existing = self._find_slot_by_label(label)
         if existing:
-            # Якщо слот вже існує — оновлюємо його метадані (uri, name, порти, контролі)
+            # Якщо слот вже існує — оновлюємо його метадані
             print(f"  Slot {label} already exists, updating metadata")
 
-            # Отримуємо інформацію про порти
             effect_data = self.client.effect_get(uri)
             if not effect_data:
                 print(f"  Failed to get effect data for {uri}")
                 return
 
-            all_inputs = []
-            all_outputs = []
-            ports = effect_data.get("ports", {})
-            audio_ports = ports.get("audio", {})
-
-            for p in audio_ports.get("input", []):
-                all_inputs.append(Port(
-                    symbol=p["symbol"],
-                    name=p.get("name", p["symbol"]),
-                    graph_path=f"{label}/{p['symbol']}"
-                ))
-            for p in audio_ports.get("output", []):
-                all_outputs.append(Port(
-                    symbol=p["symbol"],
-                    name=p.get("name", p["symbol"]),
-                    graph_path=f"{label}/{p['symbol']}"
-                ))
-
-            # Apply port overrides from config
-            plugin_config = self.config.get_plugin_by_uri(uri)
-            if plugin_config and plugin_config.inputs is not None:
-                inputs = [p for p in all_inputs if p.symbol in plugin_config.inputs]
-            else:
-                inputs = all_inputs
-
-            if plugin_config and plugin_config.outputs is not None:
-                outputs = [p for p in all_outputs if p.symbol in plugin_config.outputs]
-            else:
-                outputs = all_outputs
+            inputs, outputs = self._load_plugin_ports(label, uri, effect_data)
 
             # Update existing plugin
             plugin = existing.plugin
@@ -415,7 +431,7 @@ class Rig:
             plugin.outputs = outputs
             plugin._load_controls(effect_data)
 
-            # update UI position if provided
+            # Update UI position if provided
             if x is not None:
                 plugin.ui_x = x
             if y is not None:
@@ -438,42 +454,8 @@ class Rig:
             print(f"  Failed to get effect data for {uri}")
             return
 
-        # Створюємо порти з effect/get
-        all_inputs = []
-        all_outputs = []
-
-        # effect/get returns ports.audio.input/output as lists
-        ports = effect_data.get("ports", {})
-        audio_ports = ports.get("audio", {})
-
-        print(f"  effect_data ports keys: {ports.keys() if ports else 'none'}")
-        print(f"  audio_ports: {audio_ports}")
-
-        for p in audio_ports.get("input", []):
-            all_inputs.append(Port(
-                symbol=p["symbol"],
-                name=p.get("name", p["symbol"]),
-                graph_path=f"{label}/{p['symbol']}"
-            ))
-        for p in audio_ports.get("output", []):
-            all_outputs.append(Port(
-                symbol=p["symbol"],
-                name=p.get("name", p["symbol"]),
-                graph_path=f"{label}/{p['symbol']}"
-            ))
-
-        print(f"  Parsed ports: inputs={[p.symbol for p in all_inputs]}, outputs={[p.symbol for p in all_outputs]}")
-
-        # Застосовуємо port override з конфіга
-        if plugin_config.inputs is not None:
-            inputs = [p for p in all_inputs if p.symbol in plugin_config.inputs]
-        else:
-            inputs = all_inputs
-
-        if plugin_config.outputs is not None:
-            outputs = [p for p in all_outputs if p.symbol in plugin_config.outputs]
-        else:
-            outputs = all_outputs
+        inputs, outputs = self._load_plugin_ports(label, uri, effect_data)
+        print(f"  Parsed ports: inputs={[p.symbol for p in inputs]}, outputs={[p.symbol for p in outputs]}")
 
         # Створюємо плагін
         plugin = Plugin(
@@ -863,49 +845,9 @@ class Rig:
 
     def _connect_pair(self, src, dst):
         """Connect src outputs to dst inputs."""
-        outputs = src.outputs
-
-        if isinstance(dst, HardwareSlot):
-            inputs = dst.hw_inputs
-        else:
-            inputs = dst.inputs if hasattr(dst, 'inputs') else []
-
-        if not outputs or not inputs:
+        connections = self._get_connection_pairs(src, dst)
+        if not connections:
             return
-
-        # Check join flags
-        join_outputs = False
-        join_inputs = False
-
-        if isinstance(src, HardwareSlot):
-            join_outputs = self.config.hardware.join_inputs
-        elif hasattr(src, 'plugin') and src.plugin:
-            src_config = self.config.get_plugin_by_uri(src.plugin.uri)
-            join_outputs = src_config.join_outputs if src_config else False
-
-        if isinstance(dst, HardwareSlot):
-            join_inputs = self.config.hardware.join_outputs
-        elif hasattr(dst, 'plugin') and dst.plugin:
-            dst_config = self.config.get_plugin_by_uri(dst.plugin.uri)
-            join_inputs = dst_config.join_inputs if dst_config else False
-
-        connections = []
-
-        if join_outputs or join_inputs:
-            # All-to-all
-            for out in outputs:
-                for inp in inputs:
-                    connections.append((out, inp))
-        else:
-            # Pair by index
-            for i, out in enumerate(outputs):
-                in_idx = min(i, len(inputs) - 1)
-                connections.append((out, inputs[in_idx]))
-
-            if len(inputs) > len(outputs):
-                last_out = outputs[-1]
-                for inp in inputs[len(outputs):]:
-                    connections.append((last_out, inp))
 
         print(f"    Connecting: {connections}")
         for out_path, in_path in connections:
