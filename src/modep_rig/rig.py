@@ -265,7 +265,7 @@ class Rig:
         """Handle parameter change from WebSocket."""
         plugin = self._find_plugin_by_label(label)
         if plugin and symbol in plugin.controls:
-            plugin.controls._controls[symbol].value = value
+            plugin.set_control_value(symbol, value)
             if self._ext_on_param_change:
                 self._ext_on_param_change(label, symbol, value)
 
@@ -898,8 +898,8 @@ class Rig:
             x = base_x + idx * step
             try:
                 self.client.effect_position(slot.label, x, y)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"  ⚠️ Failed to position {slot.label}: {e}")
 
     # =========================================================================
     # Convenience API
@@ -944,7 +944,7 @@ class Rig:
                 "label": slot.label,
                 "uri": slot.plugin.uri,
                 "controls": slot.plugin.get_state(),
-                "bypassed": getattr(slot.plugin, "_bypassed", False),
+                "bypassed": slot.plugin.bypassed,
             })
 
         return {"slots": slots_state}

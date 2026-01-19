@@ -452,19 +452,6 @@ class Client:
         result = self._request(f"/effect/disconnect//graph/{output},/graph/{input}")
         return result is True
 
-    # NOTE: use self.ws.effect_bypass
-    # def effect_bypass(self, label: str, bypass: bool) -> bool:
-    #     """Увімкнути/вимкнути bypass для ефекту (через :bypass параметр)"""
-    #     value = 1 if bypass else 0
-    #     return self.effect_parameter_set(label, ":bypass", value)
-
-    # NOTE: use self.ws.effect_parameter_set
-    # def effect_parameter_set(self, label: str, symbol: str, value: float) -> bool:
-    #     """Встановити значення параметра ефекту"""
-    #     payload = f"/graph/{label}/{symbol}/{value}"
-    #     result = self._post("/effect/parameter/set/", payload)
-    #     return result is True
-
     def effect_parameter_get(self, label: str, symbol: str):
         """Отримати значення параметра ефекту"""
         return self._request(f"/effect/parameter/get//graph/{label}/{symbol}")
@@ -479,8 +466,8 @@ class Client:
         try:
             if self.ws and self.ws.plugin_position(label, x, y):
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  WebSocket position failed, using REST fallback: {e}")
 
         # Fallback to REST endpoint
         return self._request(f"/effect/position//graph/{label}/{x}/{y}")

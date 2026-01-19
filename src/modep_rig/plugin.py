@@ -165,6 +165,7 @@ class Plugin:
         self.inputs = inputs
         self.outputs = outputs
         self.controls = ControlsProxy(self)
+        self._bypassed = False
 
     def _load_controls(self, effect_data: dict[str, Any]) -> None:
         """Load control metadata from effect_get response."""
@@ -199,9 +200,19 @@ class Plugin:
 
     # --- Convenience methods ---
 
+    @property
+    def bypassed(self) -> bool:
+        """Whether plugin is currently bypassed."""
+        return self._bypassed
+
     def bypass(self, enabled: bool = True) -> bool:
         """Enable/disable bypass for this plugin."""
         return self._set_bypass(enabled)
+
+    def set_control_value(self, symbol: str, value: float) -> None:
+        """Set control value locally without API call (for WS sync)."""
+        if symbol in self.controls._controls:
+            self.controls._controls[symbol].value = value
 
     def reset_to_defaults(self) -> None:
         """Reset all controls to their default values."""
