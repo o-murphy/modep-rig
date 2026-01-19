@@ -397,6 +397,7 @@ class WsClient:
     def hw_outputs(self) -> list[str]:
         return list(self._hw_audio_outputs)
 
+
 # -----------------------------
 # Client
 # -----------------------------
