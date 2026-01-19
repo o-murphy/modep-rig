@@ -126,7 +126,9 @@ class Rig:
     - WS handlers: _on_plugin_added(), _on_plugin_removed()
     """
 
-    def __init__(self, config: Config, client: Client = None, reset_on_init: bool = False):
+    def __init__(
+        self, config: Config, client: Client = None, reset_on_init: bool = False
+    ):
         self.config = config
         # If caller did not provide a Client, create one but delay WebSocket
         # connection until after callbacks are installed to avoid missing messages.
@@ -148,7 +150,7 @@ class Rig:
         self._label_counter = 0
         # Pending inserts mapping: label -> desired insert index (used for replace)
         self._pending_inserts: dict[str, int] = {}
-        
+
         # Flag to defer reconnections during initial pedalboard loading
         self._initializing = True
 
@@ -172,7 +174,11 @@ class Rig:
         # has already happened during Client construction.
         try:
             # Only call connect if the underlying WsClient hasn't connected yet
-            if not getattr(self.client.ws, 'ws', None) or not getattr(self.client.ws.ws, 'sock', None) or not getattr(self.client.ws.ws, 'sock', 'connected'):
+            if (
+                not getattr(self.client.ws, "ws", None)
+                or not getattr(self.client.ws.ws, "sock", None)
+                or not getattr(self.client.ws.ws, "sock", "connected")
+            ):
                 # best-effort connect (WsClient.connect() is idempotent)
                 self.client.ws.connect()
         except Exception:
@@ -359,7 +365,9 @@ class Rig:
             # Full pedalboard change - rebuild everything
             self._on_pedalboard_reset()
 
-    def _load_plugin_ports(self, label: str, uri: str, effect_data: dict) -> tuple[list[Port], list[Port]]:
+    def _load_plugin_ports(
+        self, label: str, uri: str, effect_data: dict
+    ) -> tuple[list[Port], list[Port]]:
         """Load and filter plugin ports from effect data.
 
         Args:
@@ -378,17 +386,21 @@ class Rig:
         audio_ports = ports.get("audio", {})
 
         for p in audio_ports.get("input", []):
-            all_inputs.append(Port(
-                symbol=p["symbol"],
-                name=p.get("name", p["symbol"]),
-                graph_path=f"{label}/{p['symbol']}"
-            ))
+            all_inputs.append(
+                Port(
+                    symbol=p["symbol"],
+                    name=p.get("name", p["symbol"]),
+                    graph_path=f"{label}/{p['symbol']}",
+                )
+            )
         for p in audio_ports.get("output", []):
-            all_outputs.append(Port(
-                symbol=p["symbol"],
-                name=p.get("name", p["symbol"]),
-                graph_path=f"{label}/{p['symbol']}"
-            ))
+            all_outputs.append(
+                Port(
+                    symbol=p["symbol"],
+                    name=p.get("name", p["symbol"]),
+                    graph_path=f"{label}/{p['symbol']}",
+                )
+            )
 
         # Apply port overrides from config
         plugin_config = self.config.get_plugin_by_uri(uri)
@@ -404,7 +416,9 @@ class Rig:
 
         return inputs, outputs
 
-    def _on_plugin_added(self, label: str, uri: str, x: float | None = None, y: float | None = None):
+    def _on_plugin_added(
+        self, label: str, uri: str, x: float | None = None, y: float | None = None
+    ):
         """
         Handle plugin added via WebSocket feedback.
 
@@ -455,7 +469,9 @@ class Rig:
             return
 
         inputs, outputs = self._load_plugin_ports(label, uri, effect_data)
-        print(f"  Parsed ports: inputs={[p.symbol for p in inputs]}, outputs={[p.symbol for p in outputs]}")
+        print(
+            f"  Parsed ports: inputs={[p.symbol for p in inputs]}, outputs={[p.symbol for p in outputs]}"
+        )
 
         # Створюємо плагін
         plugin = Plugin(
@@ -481,15 +497,15 @@ class Rig:
         else:
             # No client request - append to end to preserve server's ordering
             # (server sends plugins in the order they should appear)
-            print(f"  Appending to preserve server order")
+            print("  Appending to preserve server order")
             desired_idx = len(self.slots)
-        
+
         # Clamp index to valid range
         if desired_idx < 0:
             desired_idx = 0
         if desired_idx > len(self.slots):
             desired_idx = len(self.slots)
-        
+
         self.slots.insert(desired_idx, slot)
         print(f"  Created slot: {slot} at index {desired_idx}")
 
@@ -501,7 +517,9 @@ class Rig:
 
         # Connect into chain UNLESS we're still initializing (in which case we'll do one final reconnect)
         if self._initializing:
-            print(f"  Skipping reconnect during initialization (will do final reconnect after loading)")
+            print(
+                "  Skipping reconnect during initialization (will do final reconnect after loading)"
+            )
         else:
             self._reconnect_slot(slot)
 
@@ -535,7 +553,7 @@ class Rig:
             src = s
 
         dst = self.output_slot
-        for s in self.slots[slot_idx + 1:]:
+        for s in self.slots[slot_idx + 1 :]:
             dst = s
             break
 
@@ -603,7 +621,9 @@ class Rig:
         print(f"REST OK: Requested add {label}, waiting for WS feedback")
         return label
 
-    def request_add_plugin_at(self, uri: str, insert_index: int, x: int = 500, y: int = 400) -> str | None:
+    def request_add_plugin_at(
+        self, uri: str, insert_index: int, x: int = 500, y: int = 400
+    ) -> str | None:
         """
         Request to add plugin and remember desired insert index so that when WS feedback
         arrives we can move the newly created slot into the requested position.
@@ -620,7 +640,9 @@ class Rig:
             print(f"REST error: Failed to add plugin {uri}")
             return None
 
-        print(f"REST OK: Requested add {label} at index {insert_index}, waiting for WS feedback")
+        print(
+            f"REST OK: Requested add {label} at index {insert_index}, waiting for WS feedback"
+        )
         return label
 
     def request_remove_plugin(self, label: str) -> bool:
@@ -776,7 +798,7 @@ class Rig:
         if isinstance(dst, HardwareSlot):
             inputs = dst.hw_inputs
         else:
-            inputs = dst.inputs if hasattr(dst, 'inputs') else []
+            inputs = dst.inputs if hasattr(dst, "inputs") else []
 
         if not outputs or not inputs:
             return []
@@ -787,13 +809,13 @@ class Rig:
 
         if isinstance(src, HardwareSlot):
             join_outputs = self.config.hardware.join_inputs
-        elif hasattr(src, 'plugin') and src.plugin:
+        elif hasattr(src, "plugin") and src.plugin:
             src_config = self.config.get_plugin_by_uri(src.plugin.uri)
             join_outputs = src_config.join_outputs if src_config else False
 
         if isinstance(dst, HardwareSlot):
             join_inputs = self.config.hardware.join_outputs
-        elif hasattr(dst, 'plugin') and dst.plugin:
+        elif hasattr(dst, "plugin") and dst.plugin:
             dst_config = self.config.get_plugin_by_uri(dst.plugin.uri)
             join_inputs = dst_config.join_inputs if dst_config else False
 
@@ -812,7 +834,7 @@ class Rig:
 
             if len(inputs) > len(outputs):
                 last_out = outputs[-1]
-                for inp in inputs[len(outputs):]:
+                for inp in inputs[len(outputs) :]:
                     connections.append((last_out, inp))
 
         return connections
@@ -830,7 +852,11 @@ class Rig:
 
         # Find neighbors
         src = self.input_slot if slot_idx == 0 else self.slots[slot_idx - 1]
-        dst = self.output_slot if slot_idx == len(self.slots) - 1 else self.slots[slot_idx + 1]
+        dst = (
+            self.output_slot
+            if slot_idx == len(self.slots) - 1
+            else self.slots[slot_idx + 1]
+        )
 
         # Connect new path
         print(f"  Connect: {src} -> {slot}")
@@ -860,7 +886,7 @@ class Rig:
         if isinstance(dst, HardwareSlot):
             inputs = dst.hw_inputs
         else:
-            inputs = dst.inputs if hasattr(dst, 'inputs') else []
+            inputs = dst.inputs if hasattr(dst, "inputs") else []
 
         for out in outputs:
             for inp in inputs:
@@ -940,12 +966,14 @@ class Rig:
         """Get current rig state as a serializable dict."""
         slots_state = []
         for slot in self.slots:
-            slots_state.append({
-                "label": slot.label,
-                "uri": slot.plugin.uri,
-                "controls": slot.plugin.get_state(),
-                "bypassed": slot.plugin.bypassed,
-            })
+            slots_state.append(
+                {
+                    "label": slot.label,
+                    "uri": slot.plugin.uri,
+                    "controls": slot.plugin.get_state(),
+                    "bypassed": slot.plugin.bypassed,
+                }
+            )
 
         return {"slots": slots_state}
 
@@ -964,12 +992,14 @@ class Rig:
         for slot_state in slots_state:
             uri = slot_state.get("uri")
             if uri:
-                label = self.request_add_plugin(uri)
+                # label = self.request_add_plugin(uri)
                 # TODO: restore controls and bypass after WS feedback
+                pass
 
     def save_preset(self, filepath: str):
         """Save current rig state to a JSON file."""
         import json
+
         state = self.get_state()
         with open(filepath, "w") as f:
             json.dump(state, f, indent=2)
@@ -978,6 +1008,7 @@ class Rig:
     def load_preset(self, filepath: str):
         """Load rig state from a JSON file."""
         import json
+
         with open(filepath, "r") as f:
             state = json.load(f)
         self.set_state(state)

@@ -15,20 +15,24 @@ HEADERS = {
 }
 
 # WebSocket message types that indicate structural changes (require rig reset)
-STRUCTURAL_MESSAGES = frozenset([
-    "add",           # Plugin added
-    "remove",        # Plugin removed
-    "connect",       # Connection made
-    "disconnect",    # Connection removed
-    "load",          # Pedalboard loaded
-    "reset",         # System reset
-])
+STRUCTURAL_MESSAGES = frozenset(
+    [
+        "add",  # Plugin added
+        "remove",  # Plugin removed
+        "connect",  # Connection made
+        "disconnect",  # Connection removed
+        "load",  # Pedalboard loaded
+        "reset",  # System reset
+    ]
+)
 
 # Messages to ignore (stats, system info)
-IGNORE_MESSAGES = frozenset([
-    "stats",
-    "sys_stats",
-])
+IGNORE_MESSAGES = frozenset(
+    [
+        "stats",
+        "sys_stats",
+    ]
+)
 
 
 class WsClient:
@@ -36,7 +40,7 @@ class WsClient:
         parsed = urlparse(base_url)
         is_secure = parsed.scheme == "https"
         scheme = "wss" if is_secure else "ws"
-        hostname = parsed.hostname if parsed.hostname else parsed.path.split(':')[0]
+        hostname = parsed.hostname if parsed.hostname else parsed.path.split(":")[0]
         # Use same port as REST API (default 80 if not specified)
 
         if parsed.port:
@@ -132,10 +136,12 @@ class WsClient:
         if msg_type == "loading_end":
             if not self._hw_ready.is_set():
                 self._hw_ready.set()
-                print(f"WS << Hardware ports ready: inputs={self._hw_audio_inputs}, outputs={self._hw_audio_outputs}")
+                print(
+                    f"WS << Hardware ports ready: inputs={self._hw_audio_inputs}, outputs={self._hw_audio_outputs}"
+                )
             if not self._pedalboard_ready.is_set():
                 self._pedalboard_ready.set()
-                print(f"WS << Pedalboard loading complete")
+                print("WS << Pedalboard loading complete")
             return
 
         # Structural changes - plugins, connections, pedalboard
@@ -149,7 +155,7 @@ class WsClient:
         if msg_type == "param_set" and len(parts) >= 4:
             # Format: param_set /graph/BigMuffPi ORDER:A:B:C 1.000000
             graph_path = parts[1]  # /graph/BigMuffPi
-            symbol = parts[2]       # ORDER:A:B:C or freq
+            symbol = parts[2]  # ORDER:A:B:C or freq
             try:
                 value = float(parts[3])
             except ValueError:
@@ -199,6 +205,7 @@ class WsClient:
 
     def connect(self):
         """Запуск клієнта у фоновому потоці з авто-реконнектом."""
+
         def run_loop():
             while self._should_reconnect:
                 self.ws = websocket.WebSocketApp(
@@ -206,14 +213,14 @@ class WsClient:
                     on_open=self.on_open,
                     on_message=self.on_message,
                     on_error=self.on_error,
-                    on_close=self.on_close
+                    on_close=self.on_close,
                 )
                 # run_forever блокує потік, поки з'єднання живе
                 self.ws.run_forever()
-                
+
                 if not self._should_reconnect:
                     break
-                time.sleep(1) # Невелика пауза перед наступною спробою підключення
+                time.sleep(1)  # Невелика пауза перед наступною спробою підключення
 
         thread = threading.Thread(target=run_loop, daemon=True)
         thread.start()
@@ -272,7 +279,9 @@ class WsClient:
 
         # Then wait for hardware ports to be discovered
         if not self._hw_ready.wait(timeout):
-            print(f"⚠️ Hardware ports not ready after {timeout}s, using discovered so far")
+            print(
+                f"⚠️ Hardware ports not ready after {timeout}s, using discovered so far"
+            )
 
         return list(self._hw_audio_inputs), list(self._hw_audio_outputs)
 
@@ -301,7 +310,7 @@ class WsClient:
     def hw_outputs(self) -> list[str]:
         """Hardware audio outputs (playback ports)."""
         return list(self._hw_audio_outputs)
-    
+
     def broadcast_order(self, order: list[str], carrier_label: str) -> bool:
         """Broadcast plugin order to all connected clients.
 
@@ -396,10 +405,10 @@ class Client:
         text = resp.text.strip()
 
         if text.lower() == "true":
-            print(f"    OK: True")
+            print("    OK: True")
             return True
         if text.lower() == "false":
-            print(f"    OK: False")
+            print("    OK: False")
             return False
 
         try:

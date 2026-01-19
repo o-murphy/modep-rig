@@ -21,6 +21,7 @@ __all__ = ["Port", "Plugin", "ChannelType"]
 
 class ChannelType:
     """Channel type constants."""
+
     LEFT = "left"
     RIGHT = "right"
     MONO = "mono"
@@ -84,13 +85,17 @@ class ControlsProxy:
 
     def __getitem__(self, symbol: str) -> ControlPort:
         if symbol not in self._controls:
-            raise KeyError(f"Control '{symbol}' not found. Available: {list(self._controls.keys())}")
+            raise KeyError(
+                f"Control '{symbol}' not found. Available: {list(self._controls.keys())}"
+            )
         return self._controls[symbol]
 
     def __setitem__(self, symbol: str, value: float) -> None:
         """Set control value and sync to API."""
         if symbol not in self._controls:
-            raise KeyError(f"Control '{symbol}' not found. Available: {list(self._controls.keys())}")
+            raise KeyError(
+                f"Control '{symbol}' not found. Available: {list(self._controls.keys())}"
+            )
 
         control = self._controls[symbol]
         control.value = value  # This clamps the value

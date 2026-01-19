@@ -37,7 +37,7 @@ class HardwareConfig:
     inputs: list[str] | None = None
     outputs: list[str] | None = None
     # All-to-all routing for hardware ports
-    join_inputs: bool = False   # Join all hardware inputs to first plugin
+    join_inputs: bool = False  # Join all hardware inputs to first plugin
     join_outputs: bool = False  # Join last plugin outputs to all hardware outputs
 
 
@@ -81,21 +81,24 @@ class Config:
         )
         rig_data = data.get("rig", {})
         rig = RigConfig(
-            slots_limit=rig_data.get("slots_limit") or rig_data.get("slot_count"),  # backward compat
+            slots_limit=rig_data.get("slots_limit")
+            or rig_data.get("slot_count"),  # backward compat
         )
 
         plugins = []
         for p in data.get("plugins", []):
-            plugins.append(PluginConfig(
-                name=p["name"],
-                uri=p["uri"],
-                category=p.get("category", ""),
-                inputs=p.get("inputs"),
-                outputs=p.get("outputs"),
-                mode=p.get("mode"),
-                join_inputs=p.get("join_inputs", False),
-                join_outputs=p.get("join_outputs", False),
-            ))
+            plugins.append(
+                PluginConfig(
+                    name=p["name"],
+                    uri=p["uri"],
+                    category=p.get("category", ""),
+                    inputs=p.get("inputs"),
+                    outputs=p.get("outputs"),
+                    mode=p.get("mode"),
+                    join_inputs=p.get("join_inputs", False),
+                    join_outputs=p.get("join_outputs", False),
+                )
+            )
 
         return cls(
             server=server,

@@ -32,8 +32,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QMenu,
 )
-from PySide6.QtCore import Qt, Signal, QTimer, QObject, QMimeData
-from PySide6.QtGui import QDrag, QPixmap
+from PySide6.QtCore import Qt, Signal, QTimer, QObject
 
 from modep_rig import Config, Rig, ControlPort
 from modep_rig.rig import Slot
@@ -41,6 +40,7 @@ from modep_rig.rig import Slot
 
 class RigSignals(QObject):
     """Qt signals for Rig WebSocket events."""
+
     param_changed = Signal(str, str, float)  # label, symbol, value
     bypass_changed = Signal(str, bool)  # label, bypassed
     slot_added = Signal(object)  # slot
@@ -342,10 +342,14 @@ class SlotWidget(QFrame):
         menu = QMenu()
 
         replace_action = menu.addAction("Replace Plugin")
-        replace_action.triggered.connect(lambda: self.replace_requested.emit(self.slot_label_id))
+        replace_action.triggered.connect(
+            lambda: self.replace_requested.emit(self.slot_label_id)
+        )
 
         remove_action = menu.addAction("Remove Plugin")
-        remove_action.triggered.connect(lambda: self.remove_requested.emit(self.slot_label_id))
+        remove_action.triggered.connect(
+            lambda: self.remove_requested.emit(self.slot_label_id)
+        )
 
         menu.exec(self.mapToGlobal(pos))
 
@@ -367,7 +371,9 @@ class SlotWidget(QFrame):
                 drag = QDrag(self)
                 mime = QMimeData()
                 # put both custom data and plain text for robustness
-                mime.setData("application/x-slot-label", self.slot_label_id.encode("utf-8"))
+                mime.setData(
+                    "application/x-slot-label", self.slot_label_id.encode("utf-8")
+                )
                 mime.setText(self.slot_label_id)
                 drag.setMimeData(mime)
 
@@ -559,8 +565,12 @@ class MainWindow(QMainWindow):
 
         # Connect rig callbacks to emit signals
         self.rig.set_callbacks(
-            on_param_change=lambda label, sym, val: self.rig_signals.param_changed.emit(label, sym, val),
-            on_bypass_change=lambda label, bp: self.rig_signals.bypass_changed.emit(label, bp),
+            on_param_change=lambda label, sym, val: self.rig_signals.param_changed.emit(
+                label, sym, val
+            ),
+            on_bypass_change=lambda label, bp: self.rig_signals.bypass_changed.emit(
+                label, bp
+            ),
             on_slot_added=lambda slot: self.rig_signals.slot_added.emit(slot),
             on_slot_removed=lambda label: self.rig_signals.slot_removed.emit(label),
             on_order_change=lambda order: self.rig_signals.order_changed.emit(order),
@@ -723,7 +733,10 @@ class MainWindow(QMainWindow):
     def _on_ws_param_changed(self, label: str, symbol: str, value: float):
         """Handle parameter change from WebSocket - update UI."""
         # If this is the selected slot, update control widget
-        if label == self.selected_label and symbol in self.controls_panel.control_widgets:
+        if (
+            label == self.selected_label
+            and symbol in self.controls_panel.control_widgets
+        ):
             widget = self.controls_panel.control_widgets[symbol]
             widget.set_value_silent(value)
 
@@ -761,9 +774,12 @@ def main():
 
     # Override server URL if needed
     import argparse
+
     parser = argparse.ArgumentParser(description="MODEP Rig Controller")
     parser.add_argument("--server", "-s", default=None, help="MOD server URL")
-    parser.add_argument("--config", "-c", help="Config", type=Path, default="config.toml")
+    parser.add_argument(
+        "--config", "-c", help="Config", type=Path, default="config.toml"
+    )
     args = parser.parse_args()
 
     config = Config.load(args.config)

@@ -2,8 +2,9 @@ import socket
 import json
 import time
 
+
 class GuitarixFinalV:
-    def __init__(self, host='localhost', port=7000):
+    def __init__(self, host="localhost", port=7000):
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.s.connect((host, port))
         # Ставимо невеликий таймаут, щоб скрипт не вис на читанні
@@ -12,7 +13,7 @@ class GuitarixFinalV:
     def notify(self, method, params):
         """Для методів без відповіді (insert, set, order)"""
         payload = {"jsonrpc": "2.0", "method": method, "params": params}
-        data = json.dumps(payload, separators=(',', ':')) + "\n"
+        data = json.dumps(payload, separators=(",", ":")) + "\n"
         print(f"-> NOTIFY: {method}")
         self.s.sendall(data.encode())
         # Після notify НЕ читаємо відповідь, щоб не було JSONDecodeError
@@ -33,7 +34,7 @@ class GuitarixFinalV:
 
         # self.notify("plugin_preset_list_load", [1])
 
-        self.notify("set", ["system.engine_state", 0]) 
+        self.notify("set", ["system.engine_state", 0])
         time.sleep(0.2)
         self.notify("set", ["system.engine_state", 1])
 
@@ -42,8 +43,9 @@ class GuitarixFinalV:
         self.notify("set", ["system.current_preset", 3])
         time.sleep(0.2)
         self.notify("set", ["system.current_preset", 4])
-        
+
         print("[OK] Команди відправлені. Перевір Rack у Guitarix.")
+
 
 if __name__ == "__main__":
     try:

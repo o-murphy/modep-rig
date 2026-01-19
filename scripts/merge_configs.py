@@ -9,6 +9,7 @@ import json
 import os
 from tomlkit import parse, table, aot
 
+
 def merge_json_to_toml(json_path, toml_path):
     try:
         if not os.path.exists(toml_path):
@@ -28,30 +29,32 @@ def merge_json_to_toml(json_path, toml_path):
         if "plugins" not in config:
             # Створюємо масив таблиць (Array of Tables)
             config.add("plugins", aot())
-        
+
         # Отримуємо існуючі URI для перевірки дублікатів
         # tomlkit об'єкти поводяться як словники/списки
         existing_uris = set()
         for p in config.get("plugins", []):
             if "uri" in p:
                 existing_uris.add(p["uri"])
-        
+
         new_plugins_count = 0
 
         # 3. Додаємо нові плагіни
         plugins_aot = config["plugins"]
-        
+
         for jp in json_plugins:
             uri = jp.get("uri")
             if uri and uri not in existing_uris:
                 cat_list = jp.get("category", [])
-                
+
                 # Створюємо нову таблицю для плагіна
                 new_entry = table()
                 new_entry.add("name", jp.get("name", "Unknown"))
                 new_entry.add("uri", uri)
-                new_entry.add("category", cat_list[0].lower() if cat_list else "utility")
-                
+                new_entry.add(
+                    "category", cat_list[0].lower() if cat_list else "utility"
+                )
+
                 # Додаємо в масив
                 plugins_aot.append(new_entry)
                 existing_uris.add(uri)
@@ -66,7 +69,9 @@ def merge_json_to_toml(json_path, toml_path):
     except Exception as e:
         print(f"❌ Помилка: {e}")
         import traceback
+
         traceback.print_exc()
+
 
 if __name__ == "__main__":
     merge_json_to_toml("plugins.json", "config.toml")
