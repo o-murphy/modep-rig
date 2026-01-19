@@ -142,7 +142,7 @@ wheels = [
 [[package]]
 name = "modep-rig"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "pyside6" },
     { name = "requests" },
