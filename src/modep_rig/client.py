@@ -269,12 +269,22 @@ class WsClient:
 
 
 class Client:
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, connect: bool = True):
+        """
+        Client for MOD server.
+
+        Args:
+            base_url: Server base URL
+            connect: If True (default) the WebSocket client is started immediately.
+                     If False, the caller should call `client.ws.connect()` after
+                     installing callbacks to avoid missing early WS messages.
+        """
         self.base_url = base_url
         self.version = self._get_version()
-        
+
         self.ws = WsClient(self.base_url)
-        self.ws.connect()
+        if connect:
+            self.ws.connect()
 
         self.effects_list = []
         self._load_effects_list()

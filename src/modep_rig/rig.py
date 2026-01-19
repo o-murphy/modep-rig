@@ -125,9 +125,14 @@ class Rig:
     - WS handlers: _on_plugin_added(), _on_plugin_removed()
     """
 
-    def __init__(self, config: Config, client: Client = None):
+    def __init__(self, config: Config, client: Client = None, reset_on_init: bool = False):
         self.config = config
-        self.client = client or Client(config.server.url)
+        # If caller did not provide a Client, create one but delay WebSocket
+        # connection until after callbacks are installed to avoid missing messages.
+        if client is None:
+            self.client = Client(config.server.url, connect=False)
+        else:
+            self.client = client
 
         # Determine hardware ports (auto-detect or from config)
         hw_inputs, hw_outputs = self._resolve_hardware_ports()
@@ -149,17 +154,37 @@ class Rig:
         self._ext_on_slot_added: OnSlotAddedCallback | None = None
         self._ext_on_slot_removed: OnSlotRemovedCallback | None = None
 
-        # Setup WebSocket callbacks
+        # Setup WebSocket callbacks BEFORE connecting so we don't miss initial messages
         self.client.ws.set_callbacks(
             on_param_change=self._on_param_change,
             on_bypass_change=self._on_bypass_change,
             on_structural_change=self._on_structural_change,
         )
 
-        # FIXME: maybe not needed due to auto init on websocket messages
-        # Initial reset
-        self.client.reset()
-        self.reconnect()
+        # If the client was created with connect=False we need to start it now so the
+        # callbacks will receive the server's initial messages. Otherwise connecting
+        # has already happened during Client construction.
+        try:
+            # Only call connect if the underlying WsClient hasn't connected yet
+            if not getattr(self.client.ws, 'ws', None) or not getattr(self.client.ws.ws, 'sock', None) or not getattr(self.client.ws.ws, 'sock', 'connected'):
+                # best-effort connect (WsClient.connect() is idempotent)
+                self.client.ws.connect()
+        except Exception:
+            # ignore and proceed; connect may have already been started elsewhere
+            pass
+
+        # By default we perform an initial reset and rebuild (preserves previous behaviour).
+        # If `reset_on_init` is False, we skip calling `client.reset()` and `reconnect()` so
+        # the local `Rig` state will be built reactively from WebSocket `add`/`remove`
+        # messages emitted by the server (useful to avoid double connect/disconnects
+        # when the server already pushes the current pedalboard on startup).
+        if reset_on_init:
+            # FIXME: maybe not needed due to auto init on websocket messages
+            # Initial reset
+            self.client.reset()
+            self.reconnect()
+        else:
+            print("Rig: skipping initial reset; waiting for WebSocket to populate state")
 
     def _resolve_hardware_ports(self) -> tuple[list[str], list[str]]:
         """Resolve hardware ports from config or auto-detect from MOD-UI."""

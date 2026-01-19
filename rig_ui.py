@@ -744,7 +744,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Called when user closes window."""
         print("Closing rig connection...")
-        self.rig.clear()
+        # self.rig.clear()
         event.accept()
 
 
@@ -763,9 +763,9 @@ def main():
     if args.server:
         config.server.url = args.server
 
-    # Create rig
+    # Create rig (do not force reset on init — build state from WebSocket)
     print("Connecting to MOD server...")
-    rig = Rig(config)
+    rig = Rig(config, reset_on_init=False)
 
     # Create and run app
     app = QApplication(sys.argv)
