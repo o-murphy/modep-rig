@@ -294,6 +294,7 @@ class SlotWidget(QFrame):
     clicked = Signal(str)  # label
     remove_requested = Signal(str)  # label
     replace_requested = Signal(str)  # label
+    dropped = Signal(str, int)  # source_label, destination_index
 
     def __init__(self, label: str, index: int, plugin_name: str, parent=None):
         super().__init__(parent)
@@ -307,6 +308,8 @@ class SlotWidget(QFrame):
         self.setMinimumSize(120, 80)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
+        self.setAcceptDrops(True)
+        self._drag_start_pos = None
 
         layout = QVBoxLayout(self)
 
@@ -346,8 +349,69 @@ class SlotWidget(QFrame):
         menu.exec(self.mapToGlobal(pos))
 
     def mousePressEvent(self, event):
+        # emit click and store drag start position
+        print(f"MOUSE_PRESS: label={self.slot_label_id} pos={event.pos()}")
         self.clicked.emit(self.slot_label_id)
+        self._drag_start_pos = event.pos()
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.LeftButton and self._drag_start_pos is not None:
+            distance = (event.pos() - self._drag_start_pos).manhattanLength()
+            print(f"MOUSE_MOVE: label={self.slot_label_id} distance={distance}")
+            if distance >= QApplication.startDragDistance():
+                from PySide6.QtGui import QDrag, QPixmap
+                from PySide6.QtCore import QMimeData
+
+                drag = QDrag(self)
+                mime = QMimeData()
+                # put both custom data and plain text for robustness
+                mime.setData("application/x-slot-label", self.slot_label_id.encode("utf-8"))
+                mime.setText(self.slot_label_id)
+                drag.setMimeData(mime)
+
+                # optional pixmap
+                pix = QPixmap(self.size())
+                self.render(pix)
+                drag.setPixmap(pix)
+
+                print(f"START_DRAG: label={self.slot_label_id}")
+                # change cursor to closed hand while dragging
+                QApplication.setOverrideCursor(Qt.ClosedHandCursor)
+                result = drag.exec(Qt.MoveAction)
+                QApplication.restoreOverrideCursor()
+                print(f"DRAG_RESULT: label={self.slot_label_id} result={result}")
+
+        super().mouseMoveEvent(event)
+
+    def dragEnterEvent(self, event):
+        mime = event.mimeData()
+        if mime.hasFormat("application/x-slot-label") or mime.hasText():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        mime = event.mimeData()
+        if mime.hasFormat("application/x-slot-label") or mime.hasText():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        mime = event.mimeData()
+        if mime.hasFormat("application/x-slot-label") or mime.hasText():
+            if mime.hasText():
+                src_label = mime.text()
+            else:
+                src_label = bytes(mime.data("application/x-slot-label")).decode("utf-8")
+            # debug log
+            print(f"DROP_EVENT: src_label={src_label} dest_index={self.index}")
+            # emit source label and this widget's index as destination
+            self.dropped.emit(src_label, self.index)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
 
 class ControlsPanel(QScrollArea):
@@ -561,6 +625,7 @@ class MainWindow(QMainWindow):
             slot_widget.clicked.connect(self._on_slot_clicked)
             slot_widget.remove_requested.connect(self._on_remove_plugin)
             slot_widget.replace_requested.connect(self._on_replace_plugin)
+            slot_widget.dropped.connect(self._on_slot_dropped)
             self.slot_widgets.append(slot_widget)
             self.slots_container.addWidget(slot_widget)
 
@@ -612,15 +677,41 @@ class MainWindow(QMainWindow):
         """Replace plugin - remove old, add new."""
         dialog = PluginSelectorDialog(self.rig, self)
         if dialog.exec() == QDialog.Accepted and dialog.selected_uri:
-            # First request remove, then add
-            # Note: in reactive architecture, the new plugin will be added at the end
-            # TODO: implement proper replace with position preservation
+            # Preserve slot index: remove old, then request add at same index
+            slot = self.rig.get_slot_by_label(label)
+            insert_idx = slot.index if slot else None
+            # Request remove first
             self.rig.request_remove_plugin(label)
-            self.rig.request_add_plugin(dialog.selected_uri)
+            # Request add at the same index (will be moved when WS feedback arrives)
+            if insert_idx is not None:
+                self.rig.request_add_plugin_at(dialog.selected_uri, insert_idx)
+            else:
+                self.rig.request_add_plugin(dialog.selected_uri)
+
+            return
 
     def _on_clear_all(self):
         """Clear all plugins."""
         self.rig.clear()
+        # Immediately update UI to reflect cleared state
+        self._rebuild_slot_widgets()
+
+    def _on_slot_dropped(self, src_label: str, dest_index: int):
+        """Handle drag-and-drop reorder: move src slot to dest index."""
+        print(f"ON_SLOT_DROPPED: src_label={src_label} dest_index={dest_index}")
+        src_slot = self.rig.get_slot_by_label(src_label)
+        if not src_slot:
+            return
+        from_idx = src_slot.index
+        to_idx = dest_index
+        print(f"ON_SLOT_DROPPED: from_idx={from_idx} to_idx={to_idx}")
+        if from_idx == to_idx:
+            return
+        # Use rig.move_slot which handles reconnect
+        self.rig.move_slot(from_idx, to_idx)
+        # Rebuild UI to reflect new order and keep selection on moved slot
+        self._rebuild_slot_widgets()
+        self._select_slot(src_label)
 
     # =========================================================================
     # WebSocket event handlers (thread-safe via Qt signals)

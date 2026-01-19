@@ -140,6 +140,8 @@ class Rig:
 
         # Label counter for unique labels
         self._label_counter = 0
+        # Pending inserts mapping: label -> desired insert index (used for replace)
+        self._pending_inserts: dict[str, int] = {}
 
         # External callbacks (for UI)
         self._ext_on_param_change: OnParamChangeCallback | None = None
@@ -343,9 +345,28 @@ class Rig:
         # Підключаємо до ланцюга
         self._reconnect_slot(slot)
 
+        # If there was a pending insert index for this label (replace behavior), move it
+        desired_idx = self._pending_inserts.pop(label, None)
+        if desired_idx is not None:
+            try:
+                current_idx = self.slots.index(slot)
+                if desired_idx < 0:
+                    desired_idx = 0
+                if desired_idx >= len(self.slots):
+                    desired_idx = len(self.slots) - 1
+                if current_idx != desired_idx:
+                    self.move_slot(current_idx, desired_idx)
+            except Exception:
+                pass
+
         # Сповіщуємо UI
         if self._ext_on_slot_added:
             self._ext_on_slot_added(slot)
+        # Ensure plugins are positioned on UI according to order
+        try:
+            self._layout_plugins()
+        except Exception:
+            pass
 
     def _on_plugin_removed(self, label: str):
         """
@@ -381,6 +402,11 @@ class Rig:
         # Сповіщуємо UI
         if self._ext_on_slot_removed:
             self._ext_on_slot_removed(label)
+        # Re-layout remaining plugins
+        try:
+            self._layout_plugins()
+        except Exception:
+            pass
 
     def _on_pedalboard_reset(self):
         """Handle full pedalboard reset/load."""
@@ -426,6 +452,26 @@ class Rig:
             return None
 
         print(f"REST OK: Requested add {label}, waiting for WS feedback")
+        return label
+
+    def request_add_plugin_at(self, uri: str, insert_index: int, x: int = 500, y: int = 400) -> str | None:
+        """
+        Request to add plugin and remember desired insert index so that when WS feedback
+        arrives we can move the newly created slot into the requested position.
+        """
+        label = self._generate_label(uri)
+        # Record desired index until WS reports the new plugin
+        self._pending_inserts[label] = insert_index
+
+        result = self.client.effect_add(label, uri, x, y)
+
+        if not result or not isinstance(result, dict) or not result.get("valid"):
+            # cleanup pending
+            self._pending_inserts.pop(label, None)
+            print(f"REST error: Failed to add plugin {uri}")
+            return None
+
+        print(f"REST OK: Requested add {label} at index {insert_index}, waiting for WS feedback")
         return label
 
     def request_remove_plugin(self, label: str) -> bool:
@@ -487,6 +533,12 @@ class Rig:
 
         for i in range(len(chain) - 1):
             self._connect_pair(chain[i], chain[i + 1])
+
+        # After connections are rebuilt, update UI positions of plugins to reflect order
+        try:
+            self._layout_plugins()
+        except Exception:
+            pass
 
         print("=== RECONNECT DONE ===\n")
 
@@ -597,6 +649,22 @@ class Rig:
                     self.client.effect_disconnect(out, inp)
                 except Exception:
                     pass
+
+    def _layout_plugins(self, step: int = 500, base_x: int = 200, y: int = 400):
+        """
+        Position plugins on the MOD-UI horizontally according to their order.
+
+        Args:
+            step: X step between plugins
+            base_x: X coordinate for first plugin
+            y: Y coordinate for all plugins
+        """
+        for idx, slot in enumerate(self.slots):
+            x = base_x + idx * step
+            try:
+                self.client.effect_position(slot.label, x, y)
+            except Exception:
+                pass
 
     # =========================================================================
     # Convenience API

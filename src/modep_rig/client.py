@@ -221,6 +221,22 @@ class WsClient:
         value = 1 if bypass else 0
         return self.effect_parameter_set(label, ":bypass", value)
 
+    def plugin_position(self, label: str, x: float, y: float) -> bool:
+        """Send plugin position update via WebSocket using `plugin_pos` command.
+
+        Format: plugin_pos /graph/<label> <x> <y>
+        """
+        if self.ws and self.ws.sock and self.ws.sock.connected:
+            # Use float formatting with high precision to mimic UI
+            command = f"plugin_pos /graph/{label} {float(x)} {float(y)}"
+            try:
+                print(f"WS >> {command}")
+                self.ws.send(command)
+                return True
+            except Exception as e:
+                print(f"⚠️ Помилка відправки plugin_pos: {e}")
+        return False
+
     def get_hardware_ports(self, timeout: float = 5.0) -> tuple[list[str], list[str]]:
         """Get discovered hardware ports.
 
@@ -390,6 +406,14 @@ class Client:
 
     def effect_position(self, label: str, x: int, y: int):
         """Змінити позицію ефекту на UI"""
+        # Prefer WebSocket plugin_pos command when available (real-time UI placement)
+        try:
+            if self.ws and self.ws.plugin_position(label, x, y):
+                return True
+        except Exception:
+            pass
+
+        # Fallback to REST endpoint
         return self._request(f"/effect/position//graph/{label}/{x}/{y}")
 
     # =========================================================================
