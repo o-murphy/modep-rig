@@ -32,7 +32,8 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QMenu,
 )
-from PySide6.QtCore import Qt, Signal, QTimer, QObject
+from PySide6.QtCore import Qt, Signal, QTimer, QObject, QMimeData
+from PySide6.QtGui import QDrag, QPixmap
 
 from modep_rig import Config, Rig, ControlPort
 from modep_rig.rig import Slot
