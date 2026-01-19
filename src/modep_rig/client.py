@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import time
 import threading
 from typing import Callable
@@ -6,7 +7,7 @@ from urllib.parse import unquote, urlparse
 import requests
 import websocket
 
-__all__ = ["Client", "WsConnection", "WsClient"]
+__all__ = ["Client", "WsConnection", "WsProtocol", "WsClient"]
 
 
 HEADERS = {
@@ -28,6 +29,104 @@ STRUCTURAL_MESSAGES = frozenset(
 
 # Messages to ignore (stats, system info)
 IGNORE_MESSAGES = frozenset(["stats", "sys_stats", "ping"])
+
+
+# -----------------------------
+# Event dataclasses
+# -----------------------------
+
+
+@dataclass
+class HwPort:
+    name: str
+    is_output: bool
+
+
+@dataclass
+class HardwareReady:
+    inputs: list[str]
+    outputs: list[str]
+
+
+# --------------------
+# Pedalboard / Plugin events
+@dataclass
+class ParamChange:
+    label: str
+    symbol: str
+    value: float
+
+
+@dataclass
+class BypassChange:
+    label: str
+    bypassed: bool
+
+
+@dataclass
+class OrderChange:
+    order: list[str]
+
+
+@dataclass
+class StructuralChange:
+    msg_type: str
+    raw_message: str
+
+
+# --------------------
+# Union of all possible events
+WsEvent = (
+    HwPort | HardwareReady | ParamChange | BypassChange | OrderChange | StructuralChange
+)
+
+
+# -----------------------------
+# Protocol
+# -----------------------------
+class WsProtocol:
+    IGNORE_MESSAGES = {"stats", "ping"}
+    STRUCTURAL_MESSAGES = {"add_effect", "remove_effect", "connect"}
+
+    @staticmethod
+    def parse(message: str) -> WsEvent | None:
+        parts = message.split()
+        if not parts:
+            return None
+        msg_type = parts[0]
+        if msg_type in WsProtocol.IGNORE_MESSAGES:
+            return None
+
+        if msg_type == "add_hw_port" and len(parts) >= 5:
+            port_path = parts[1]
+            port_type = parts[2]
+            is_graph_output = parts[3] == "1"
+            if port_type == "audio" and port_path.startswith("/graph/"):
+                return HwPort(name=port_path[7:], is_output=is_graph_output)
+
+        if msg_type == "loading_end":
+            return HardwareReady(inputs=[], outputs=[])
+
+        if msg_type in WsProtocol.STRUCTURAL_MESSAGES:
+            return StructuralChange(msg_type=msg_type, raw_message=message)
+
+        if msg_type == "param_set" and len(parts) >= 4:
+            graph_path = parts[1]
+            symbol = parts[2]
+            try:
+                value = float(parts[3])
+            except ValueError:
+                return None
+            if graph_path.startswith("/graph/"):
+                label = graph_path[7:]
+                if symbol.startswith("ORDER:"):
+                    return OrderChange(order=symbol.split(":")[1:])
+                elif symbol == ":bypass":
+                    return BypassChange(label=label, bypassed=value > 0.5)
+                else:
+                    return ParamChange(label=label, symbol=symbol, value=value)
+
+        return StructuralChange(msg_type=msg_type, raw_message=message)
 
 
 class WsConnection:
@@ -138,34 +237,32 @@ class WsConnection:
             self._on_close()
 
 
+# -----------------------------
+# WsClient
+# -----------------------------
 class WsClient:
     def __init__(self, base_url: str):
-        # -------------------
-        # Формування WS URL
         parsed = urlparse(base_url)
         is_secure = parsed.scheme == "https"
         scheme = "wss" if is_secure else "ws"
-        hostname = parsed.hostname if parsed.hostname else parsed.path.split(":")[0]
+        hostname = parsed.hostname or parsed.path.split(":")[0]
         port = parsed.port or (443 if is_secure else 18181)
         self.ws_url = f"{scheme}://{hostname}:{port}/websocket"
         print("WS:", self.ws_url)
 
-        # -------------------
         # Callbacks
         self._on_param_change: Callable[[str, str, float], None] | None = None
         self._on_bypass_change: Callable[[str, bool], None] | None = None
         self._on_structural_change: Callable[[str, str], None] | None = None
         self._on_order_change: Callable[[list[str]], None] | None = None
 
-        # -------------------
         # Hardware / Pedalboard state
         self._hw_audio_inputs: list[str] = []
         self._hw_audio_outputs: list[str] = []
         self._hw_ready = threading.Event()
         self._pedalboard_ready = threading.Event()
 
-        # -------------------
-        # Transport layer
+        # Transport
         self.conn = WsConnection(
             self.ws_url,
             on_open=self._on_ws_open,
@@ -198,69 +295,44 @@ class WsClient:
         self._pedalboard_ready.clear()
 
     def _on_ws_message(self, message: str):
-        parts = message.split()
-        if not parts:
-            return
-        msg_type = parts[0]
-
-        if msg_type in IGNORE_MESSAGES:
+        event = WsProtocol.parse(message)
+        if not event:
             return
 
-        # Hardware port discovery
-        if msg_type == "add_hw_port" and len(parts) >= 5:
-            port_path = parts[1]
-            port_type = parts[2]
-            is_graph_output = parts[3] == "1"
-
-            if port_type == "audio" and port_path.startswith("/graph/"):
-                port_name = port_path[7:]
-                if is_graph_output:
-                    if port_name not in self._hw_audio_outputs:
-                        self._hw_audio_outputs.append(port_name)
-                        print(f"WS << HW output: {port_name}")
+        match event:
+            case HwPort(name=name, is_output=is_output):
+                if is_output:
+                    if name not in self._hw_audio_outputs:
+                        self._hw_audio_outputs.append(name)
+                        print(f"WS << HW output: {name}")
                 else:
-                    if port_name not in self._hw_audio_inputs:
-                        self._hw_audio_inputs.append(port_name)
-                        print(f"WS << HW input: {port_name}")
-            return
+                    if name not in self._hw_audio_inputs:
+                        self._hw_audio_inputs.append(name)
+                        print(f"WS << HW input: {name}")
 
-        if msg_type == "loading_end":
-            if not self._hw_ready.is_set():
+            case HardwareReady():
                 self._hw_ready.set()
-            if not self._pedalboard_ready.is_set():
                 self._pedalboard_ready.set()
-            print("WS << Pedalboard loading complete")
-            return
+                print(
+                    f"WS << Hardware ports ready: inputs={self._hw_audio_inputs}, outputs={self._hw_audio_outputs}"
+                )
+                print("WS << Pedalboard loading complete")
 
-        if msg_type in STRUCTURAL_MESSAGES:
-            if self._on_structural_change:
-                self._on_structural_change(msg_type, message)
-            return
+            case ParamChange(label=label, symbol=symbol, value=value):
+                if self._on_param_change:
+                    self._on_param_change(label, symbol, value)
 
-        if msg_type == "param_set" and len(parts) >= 4:
-            graph_path = parts[1]
-            symbol = parts[2]
-            try:
-                value = float(parts[3])
-            except ValueError:
-                return
+            case BypassChange(label=label, bypassed=b):
+                if self._on_bypass_change:
+                    self._on_bypass_change(label, b)
 
-            if graph_path.startswith("/graph/"):
-                label = graph_path[7:]
+            case OrderChange(order=order):
+                if self._on_order_change:
+                    self._on_order_change(order)
 
-                if symbol.startswith("ORDER:"):
-                    order = symbol.split(":")[1:]
-                    if self._on_order_change:
-                        self._on_order_change(order)
-                    return
-
-                if symbol == ":bypass":
-                    if self._on_bypass_change:
-                        self._on_bypass_change(label, value > 0.5)
-                else:
-                    if self._on_param_change:
-                        self._on_param_change(label, symbol, value)
-            return
+            case StructuralChange(msg_type=mt, raw_message=msg):
+                if self._on_structural_change:
+                    self._on_structural_change(mt, msg)
 
         # Log unknown messages
         print(f"WS << {message}")
@@ -325,7 +397,9 @@ class WsClient:
     def hw_outputs(self) -> list[str]:
         return list(self._hw_audio_outputs)
 
-
+# -----------------------------
+# Client
+# -----------------------------
 class Client:
     def __init__(self, base_url: str, connect: bool = True):
         """
