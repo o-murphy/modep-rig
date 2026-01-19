@@ -21,7 +21,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QLabel,
     QDial,
-    QSlider,
     QComboBox,
     QCheckBox,
     QGroupBox,
@@ -37,13 +36,15 @@ from PySide6.QtCore import Qt, Signal, QTimer, QObject
 from PySide6.QtGui import QCursor
 
 from modep_rig import Config, Rig, ControlPort
+from modep_rig.rig import Slot
 
 
 class RigSignals(QObject):
     """Qt signals for Rig WebSocket events."""
     param_changed = Signal(str, str, float)  # label, symbol, value
     bypass_changed = Signal(str, bool)  # label, bypassed
-    structural_changed = Signal(str, str)  # msg_type, raw_message
+    slot_added = Signal(object)  # slot
+    slot_removed = Signal(str)  # label
 
 
 class ControlWidget(QWidget):
@@ -209,7 +210,6 @@ class IntegerControl(ControlWidget):
         layout.addWidget(self.label)
 
         # Slider with integer steps
-        # self.slider = QSlider(Qt.Horizontal)
         self.slider = QDial()
 
         self.slider.setRange(int(control.minimum), int(control.maximum))
@@ -256,21 +256,9 @@ class PluginSelectorDialog(QDialog):
 
         layout = QVBoxLayout(self)
 
-        # Search/filter could be added here
-
-        # Plugin list
+        # Plugin list - show only whitelisted plugins
         self.list_widget = QListWidget()
-        # for effect in effects_list:
-        #     name = effect.get("name", "Unknown")
-        #     uri = effect.get("uri", "")
-        #     category = effect.get("category", [])
-        #     cat_str = ", ".join(category) if category else "Uncategorized"
 
-        #     item = QListWidgetItem(f"{name}\n  [{cat_str}]")
-        #     item.setData(Qt.UserRole, uri)
-        #     self.list_widget.addItem(item)
-
-        # Фільтруємо: показуємо тільки ті плагіни, які є в config.toml
         for p_config in rig.config.plugins:
             name = p_config.name
             uri = p_config.uri
@@ -303,18 +291,15 @@ class PluginSelectorDialog(QDialog):
 class SlotWidget(QFrame):
     """Widget representing a single slot in the rig."""
 
-    clicked = Signal(str)  # slot_uuid
-    remove_requested = Signal(str)  # slot_uuid
-    load_requested = Signal(str)  # slot_uuid
-    replace_requested = Signal(str)  # slot_uuid
-    unload_plugin_requested = Signal(str)  # slot_uuid
+    clicked = Signal(str)  # label
+    remove_requested = Signal(str)  # label
+    replace_requested = Signal(str)  # label
 
-    def __init__(self, slot_uuid: str, index: int, plugin_name: str, is_empty: bool = False, parent=None):
+    def __init__(self, label: str, index: int, plugin_name: str, parent=None):
         super().__init__(parent)
-        self.slot_uuid = slot_uuid
+        self.slot_label_id = label  # Plugin label (unique ID)
         self.index = index
         self.is_selected = False
-        self.is_empty = is_empty
 
         self.setFrameStyle(QFrame.Box | QFrame.Raised)
         self.setLineWidth(2)
@@ -326,9 +311,9 @@ class SlotWidget(QFrame):
         layout = QVBoxLayout(self)
 
         # Slot number
-        self.slot_label = QLabel(f"Slot {index}")
-        self.slot_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.slot_label)
+        self.slot_num_label = QLabel(f"Slot {index}")
+        self.slot_num_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.slot_num_label)
 
         # Plugin name
         self.plugin_label = QLabel(plugin_name)
@@ -337,10 +322,6 @@ class SlotWidget(QFrame):
         layout.addWidget(self.plugin_label)
 
         self._update_style()
-
-    def set_plugin_name(self, name: str, is_empty: bool = False):
-        self.plugin_label.setText(name)
-        self.is_empty = is_empty
 
     def set_selected(self, selected: bool):
         self.is_selected = selected
@@ -355,24 +336,17 @@ class SlotWidget(QFrame):
     def _show_context_menu(self, pos):
         """Show context menu for slot operations."""
         menu = QMenu()
-        
-        if self.is_empty:
-            load_action = menu.addAction("Load Plugin")
-            load_action.triggered.connect(lambda: self.load_requested.emit(self.slot_uuid))
-        else:
-            replace_action = menu.addAction("Replace Plugin")
-            replace_action.triggered.connect(lambda: self.replace_requested.emit(self.slot_uuid))
-            
-            unload_action = menu.addAction("Unload Plugin (Keep Slot)")
-            unload_action.triggered.connect(lambda: self.unload_plugin_requested.emit(self.slot_uuid))
-        
-        remove_action = menu.addAction("Remove Slot")
-        remove_action.triggered.connect(lambda: self.remove_requested.emit(self.slot_uuid))
-        
+
+        replace_action = menu.addAction("Replace Plugin")
+        replace_action.triggered.connect(lambda: self.replace_requested.emit(self.slot_label_id))
+
+        remove_action = menu.addAction("Remove Plugin")
+        remove_action.triggered.connect(lambda: self.remove_requested.emit(self.slot_label_id))
+
         menu.exec(self.mapToGlobal(pos))
 
     def mousePressEvent(self, event):
-        self.clicked.emit(self.slot_uuid)
+        self.clicked.emit(self.slot_label_id)
         super().mousePressEvent(event)
 
 
@@ -390,25 +364,25 @@ class ControlsPanel(QScrollArea):
         self.setWidget(self.container)
 
         self.plugin = None
-        self.current_slot_uuid: str | None = None
+        self.current_label: str | None = None
         self.control_widgets: dict[str, ControlWidget] = {}
         self.bypass_checkbox: QCheckBox | None = None
         self._updating_bypass = False
 
         # Placeholder
-        self.placeholder = QLabel("Select a slot with a plugin to see controls")
+        self.placeholder = QLabel("Select a plugin to see controls")
         self.placeholder.setAlignment(Qt.AlignCenter)
         self.layout.addWidget(self.placeholder)
 
-    def set_plugin(self, plugin, slot_uuid: str | None = None):
+    def set_plugin(self, plugin, label: str | None = None):
         """Set the plugin to display controls for."""
         # Clear existing
         self._clear_controls()
         self.plugin = plugin
-        self.current_slot_uuid = slot_uuid
+        self.current_label = label
 
         if plugin is None:
-            self.placeholder.setText("Select a slot to see controls")
+            self.placeholder.setText("Select a plugin to see controls")
             self.placeholder.show()
             return
 
@@ -425,7 +399,7 @@ class ControlsPanel(QScrollArea):
         self.bypass_checkbox.setChecked(bypassed)
         self.bypass_checkbox.toggled.connect(self._on_bypass_changed)
         header.addWidget(self.bypass_checkbox)
-        
+
         header.addStretch()
 
         self.layout.addLayout(header)
@@ -508,19 +482,21 @@ class MainWindow(QMainWindow):
     def __init__(self, rig: Rig):
         super().__init__()
         self.rig = rig
-        self.selected_slot_uuid: str | None = None
+        self.selected_label: str | None = None
 
         # Setup signals for thread-safe UI updates
         self.rig_signals = RigSignals()
         self.rig_signals.param_changed.connect(self._on_ws_param_changed)
         self.rig_signals.bypass_changed.connect(self._on_ws_bypass_changed)
-        self.rig_signals.structural_changed.connect(self._on_ws_structural_changed)
+        self.rig_signals.slot_added.connect(self._on_ws_slot_added)
+        self.rig_signals.slot_removed.connect(self._on_ws_slot_removed)
 
         # Connect rig callbacks to emit signals
         self.rig.set_callbacks(
             on_param_change=lambda label, sym, val: self.rig_signals.param_changed.emit(label, sym, val),
             on_bypass_change=lambda label, bp: self.rig_signals.bypass_changed.emit(label, bp),
-            on_structural_change=lambda typ, msg: self.rig_signals.structural_changed.emit(typ, msg),
+            on_slot_added=lambda slot: self.rig_signals.slot_added.emit(slot),
+            on_slot_removed=lambda label: self.rig_signals.slot_removed.emit(label),
         )
 
         self.setWindowTitle("MODEP Rig Controller")
@@ -537,16 +513,16 @@ class MainWindow(QMainWindow):
         slots_label = QLabel("<b>Effect Chain</b>")
         self.left_panel.addWidget(slots_label)
 
-        # Container for slot widgets (will be rebuilt dynamically)
+        # Container for slot widgets
         self.slots_container = QVBoxLayout()
         self.left_panel.addLayout(self.slots_container)
 
         self.slot_widgets: list[SlotWidget] = []
 
-        # Add slot button
-        self.add_slot_btn = QPushButton("+ Add Slot")
-        self.add_slot_btn.clicked.connect(self._on_add_slot)
-        self.left_panel.addWidget(self.add_slot_btn)
+        # Add plugin button (no empty slots anymore)
+        self.add_plugin_btn = QPushButton("+ Add Plugin")
+        self.add_plugin_btn.clicked.connect(self._on_add_plugin)
+        self.left_panel.addWidget(self.add_plugin_btn)
 
         self.left_panel.addStretch()
 
@@ -562,7 +538,7 @@ class MainWindow(QMainWindow):
         self.controls_panel.setMinimumWidth(500)
         main_layout.addWidget(self.controls_panel, stretch=1)
 
-        # Initial state - rebuild slot widgets
+        # Initial state
         self._rebuild_slot_widgets()
 
     def _rebuild_slot_widgets(self):
@@ -578,125 +554,73 @@ class MainWindow(QMainWindow):
             if item.widget():
                 item.widget().deleteLater()
 
-        # Create new widgets for each slot (only slots with plugins exist now)
+        # Create new widgets for each slot
         for i, slot in enumerate(self.rig.slots):
-            plugin_name = slot.plugin.name if slot.plugin else "Empty"
-            is_empty = slot.is_empty
-            slot_widget = SlotWidget(slot.uuid, i, plugin_name, is_empty)
+            plugin_name = slot.plugin.name
+            slot_widget = SlotWidget(slot.label, i, plugin_name)
             slot_widget.clicked.connect(self._on_slot_clicked)
-            slot_widget.remove_requested.connect(self._on_remove_slot)
-            slot_widget.load_requested.connect(self._on_load_plugin_requested)
-            slot_widget.replace_requested.connect(self._on_replace_plugin_requested)
-            slot_widget.unload_plugin_requested.connect(self._on_unload_plugin_requested)
+            slot_widget.remove_requested.connect(self._on_remove_plugin)
+            slot_widget.replace_requested.connect(self._on_replace_plugin)
             self.slot_widgets.append(slot_widget)
             self.slots_container.addWidget(slot_widget)
 
         # Update selection
-        if self.selected_slot_uuid and self.rig.get_slot(self.selected_slot_uuid):
-            self._select_slot(self.selected_slot_uuid)
+        if self.selected_label and self.rig.get_slot_by_label(self.selected_label):
+            self._select_slot(self.selected_label)
         elif self.rig.slots:
-            self._select_slot(self.rig.slots[0].uuid)
+            self._select_slot(self.rig.slots[0].label)
         else:
-            self.selected_slot_uuid = None
+            self.selected_label = None
             self.controls_panel.set_plugin(None)
 
-    def _select_slot(self, slot_uuid: str):
+    def _select_slot(self, label: str):
         """Select a slot and show its controls."""
-        self.selected_slot_uuid = slot_uuid
+        self.selected_label = label
 
         for sw in self.slot_widgets:
-            sw.set_selected(sw.slot_uuid == slot_uuid)
+            sw.set_selected(sw.slot_label_id == label)
 
-        slot = self.rig.get_slot(slot_uuid)
+        slot = self.rig.get_slot_by_label(label)
         if slot:
-            self.controls_panel.set_plugin(slot.plugin, slot_uuid)
+            self.controls_panel.set_plugin(slot.plugin, label)
         else:
             self.controls_panel.set_plugin(None)
 
-    def _on_slot_clicked(self, slot_uuid: str):
-        """Handle slot click - select it, double-click to replace plugin."""
-        slot = self.rig.get_slot(slot_uuid)
-        
-        # Check if this is a double-click on an occupied slot
-        # (we'll implement via button instead)
-        self._select_slot(slot_uuid)
+    def _on_slot_clicked(self, label: str):
+        """Handle slot click - select it."""
+        self._select_slot(label)
 
-    def _on_add_slot(self):
-        """Add a new slot with optional plugin."""
-        # Show menu with options
-        menu = QMenu()
-        empty_action = menu.addAction("Add Empty Slot")
-        plugin_action = menu.addAction("Add Slot with Plugin")
-        
-        action = menu.exec(QCursor.pos())
-        
-        if action == empty_action:
-            try:
-                slot = self.rig.add_slot()
-                self._rebuild_slot_widgets()
-                self._select_slot(slot.uuid)
-            except IndexError as e:
-                print(f"Cannot add slot: {e}")
-        
-        elif action == plugin_action:
-            dialog = PluginSelectorDialog(self.rig, self)
-            if dialog.exec() == QDialog.Accepted and dialog.selected_uri:
-                try:
-                    slot = self.rig.add_slot()
-                    # Use load_and_connect for empty slots
-                    slot.load_and_connect(dialog.selected_uri)
-                    self._rebuild_slot_widgets()
-                    self._select_slot(slot.uuid)
-                except IndexError as e:
-                    print(f"Cannot add slot: {e}")
-                except Exception as e:
-                    print(f"Failed to load plugin: {e}")
+    def _on_add_plugin(self):
+        """Add a new plugin (request via REST, wait for WS feedback)."""
+        dialog = PluginSelectorDialog(self.rig, self)
+        if dialog.exec() == QDialog.Accepted and dialog.selected_uri:
+            label = self.rig.request_add_plugin(dialog.selected_uri)
+            if label:
+                print(f"Requested add plugin, label={label}")
+            else:
+                print("Failed to request add plugin")
 
-    def _on_remove_slot(self, slot_uuid: str):
-        """Remove the specified slot."""
-        slot = self.rig.get_slot(slot_uuid)
-        if slot:
-            self.rig.remove_slot(slot)
-            self._rebuild_slot_widgets()
+    def _on_remove_plugin(self, label: str):
+        """Remove plugin (request via REST, wait for WS feedback)."""
+        success = self.rig.request_remove_plugin(label)
+        if success:
+            print(f"Requested remove plugin {label}")
+        else:
+            print(f"Failed to request remove plugin {label}")
 
-    def _on_unload_plugin_requested(self, slot_uuid: str):
-        """Unload plugin from slot (keep slot empty)."""
-        slot = self.rig.get_slot(slot_uuid)
-        if slot and not slot.is_empty:
-            slot.unload_plugin()
-            self._rebuild_slot_widgets()
-            self._select_slot(slot_uuid)
-
-    def _on_replace_plugin_requested(self, slot_uuid: str):
-        """Replace plugin in the specified slot."""
-        slot = self.rig.get_slot(slot_uuid)
-        if slot and not slot.is_empty:
-            dialog = PluginSelectorDialog(self.rig, self)
-            if dialog.exec() == QDialog.Accepted and dialog.selected_uri:
-                try:
-                    slot.replace(dialog.selected_uri)
-                    self._rebuild_slot_widgets()
-                    self._select_slot(slot.uuid)
-                except Exception as e:
-                    print(f"Failed to replace plugin: {e}")
-
-    def _on_load_plugin_requested(self, slot_uuid: str):
-        """Load plugin in empty slot."""
-        slot = self.rig.get_slot(slot_uuid)
-        if slot and slot.is_empty:
-            dialog = PluginSelectorDialog(self.rig, self)
-            if dialog.exec() == QDialog.Accepted and dialog.selected_uri:
-                try:
-                    slot.load_and_connect(dialog.selected_uri)
-                    self._rebuild_slot_widgets()
-                    self._select_slot(slot.uuid)
-                except Exception as e:
-                    print(f"Failed to load plugin: {e}")
+    def _on_replace_plugin(self, label: str):
+        """Replace plugin - remove old, add new."""
+        dialog = PluginSelectorDialog(self.rig, self)
+        if dialog.exec() == QDialog.Accepted and dialog.selected_uri:
+            # First request remove, then add
+            # Note: in reactive architecture, the new plugin will be added at the end
+            # TODO: implement proper replace with position preservation
+            self.rig.request_remove_plugin(label)
+            self.rig.request_add_plugin(dialog.selected_uri)
 
     def _on_clear_all(self):
-        """Clear all slots."""
+        """Clear all plugins."""
         self.rig.clear()
-        self._rebuild_slot_widgets()
 
     # =========================================================================
     # WebSocket event handlers (thread-safe via Qt signals)
@@ -704,47 +628,46 @@ class MainWindow(QMainWindow):
 
     def _on_ws_param_changed(self, label: str, symbol: str, value: float):
         """Handle parameter change from WebSocket - update UI."""
-        # Find which slot has this plugin
-        for slot in self.rig.slots:
-            if slot.plugin and slot.plugin.label == label:
-                # If this is the selected slot, update control widget
-                if slot.uuid == self.selected_slot_uuid and symbol in self.controls_panel.control_widgets:
-                    widget = self.controls_panel.control_widgets[symbol]
-                    widget.set_value_silent(value)
-                break
+        # If this is the selected slot, update control widget
+        if label == self.selected_label and symbol in self.controls_panel.control_widgets:
+            widget = self.controls_panel.control_widgets[symbol]
+            widget.set_value_silent(value)
 
     def _on_ws_bypass_changed(self, label: str, bypassed: bool):
         """Handle bypass change from WebSocket - update UI."""
-        # Find which slot has this plugin
-        for slot in self.rig.slots:
-            if slot.plugin and slot.plugin.label == label:
-                # If this is the selected slot, update bypass checkbox
-                if slot.uuid == self.selected_slot_uuid:
-                    self.controls_panel.set_bypass_silent(bypassed)
-                break
+        if label == self.selected_label:
+            self.controls_panel.set_bypass_silent(bypassed)
 
-    def _on_ws_structural_changed(self, msg_type: str, _raw_message: str):
-        """Handle structural change from WebSocket - refresh UI."""
-        print(f"⚠️ UI: Structural change: {msg_type}")
-        # Refresh slots display - structure may have changed externally
+    def _on_ws_slot_added(self, slot: Slot):
+        """Handle slot added from WebSocket - rebuild UI."""
+        print(f"UI: Slot added: {slot.label}")
+        self._rebuild_slot_widgets()
+        # Select the new slot
+        self._select_slot(slot.label)
+
+    def _on_ws_slot_removed(self, label: str):
+        """Handle slot removed from WebSocket - rebuild UI."""
+        print(f"UI: Slot removed: {label}")
         self._rebuild_slot_widgets()
 
     def closeEvent(self, event):
-        """Викликається, коли користувач закриває вікно."""
+        """Called when user closes window."""
         print("Closing rig connection...")
-        self._on_clear_all()  # Явно викликаємо очищення
+        self.rig.clear()
         event.accept()
 
 
 def main():
     # Load config
-    config = Config.load("config.toml")
 
     # Override server URL if needed
     import argparse
     parser = argparse.ArgumentParser(description="MODEP Rig Controller")
     parser.add_argument("--server", "-s", default=None, help="MOD server URL")
+    parser.add_argument("--config", "-c", help="Config", type=Path, default="config.toml")
     args = parser.parse_args()
+
+    config = Config.load(args.config)
 
     if args.server:
         config.server.url = args.server
@@ -755,20 +678,17 @@ def main():
 
     # Create and run app
     app = QApplication(sys.argv)
-    
-    # 2. Обробка сигналу Ctrl+C
-    # Використовуємо стандартний обробник сигналу Python
+
+    # Handle Ctrl+C
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
     window = MainWindow(rig)
     window.show()
 
-    # 3. Додаємо таймер (важливо для Linux/Windows)
-    # Qt блокує виконання Python, тому без таймера Ctrl+C спрацює 
-    # лише після того, як ви якось взаємодієте з вікном.
+    # Timer for Ctrl+C on Linux/Windows
     timer = QTimer()
-    timer.start(500)  # Перевіряти кожні 500 мс
-    timer.timeout.connect(lambda: None)  # Порожня функція просто для "пробудження" інтерпретатора
+    timer.start(500)
+    timer.timeout.connect(lambda: None)
 
     sys.exit(app.exec())
 

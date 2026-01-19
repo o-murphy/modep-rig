@@ -1,8 +1,8 @@
 # config.toml
 
 [server]
-# url = "http://127.0.0.1:18181/"
-url = "http://192.168.88.247:80/"
+url = "http://127.0.0.1:18181/"
+# url = "http://192.168.88.247:80/"
 # url = "https://try.mod.audio/"
 
 [hardware]
@@ -23,6 +23,30 @@ slot_count = 4
 # =============================================================================
 
 
+[[plugins]]
+name = "DS1"
+uri = "http://moddevices.com/plugins/mod-devel/DS1"
+category = "distortion"
+
+[[plugins]]
+name = "KlonCentaur"
+uri = "https://github.com/jatinchowdhury18/KlonCentaur"
+category = "overdrive"
+
+[[plugins]]
+name = "BigMuffPi"
+uri = "http://moddevices.com/plugins/mod-devel/BigMuffPi"
+category = "distortion"
+
+[[plugins]]
+name = "Schrammel OJD"
+uri = "https://github.com/JanosGit/Schrammel_OJD"
+category = "overdrive"
+
+[[plugins]]
+name = "Paranoia"
+uri = "http://remaincalm.org/plugins/paranoia"
+category = "distortion"
 
 
 

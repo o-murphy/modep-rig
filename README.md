@@ -5,9 +5,35 @@ Python client for MODEP/MOD-UI audio plugin host.
 ## Features
 
 - REST API client for MOD-UI
-- WebSocket client for real-time parameter control
-- Rig management with automatic audio routing
+- WebSocket client for real-time parameter feedback
+- Reactive architecture (Server-as-Source-of-Truth)
+- Automatic audio routing with smart channel pairing
 - Plugin whitelist with port override support
+
+## Architecture
+
+The rig uses a **reactive architecture** where the server is the source of truth:
+
+```
+Client wants to add plugin:
+  rig.request_add_plugin(uri) → REST request
+    ├─ OK: do nothing, wait for WS feedback
+    └─ ERROR: signal error to UI
+  ...
+  WS: "add /graph/label ..." → _on_plugin_added() → Slot created, connected
+
+Client wants to remove plugin:
+  rig.request_remove_plugin(label) → REST request
+    ├─ OK: do nothing, wait for WS feedback
+    └─ ERROR: signal error to UI
+  ...
+  WS: "remove /graph/label" → _on_plugin_removed() → Slot removed
+```
+
+This enables:
+- Synchronization with MOD-UI browser interface
+- Multi-client support (future)
+- External changes reflected automatically
 
 ## Installation
 
@@ -117,58 +143,57 @@ from modep_rig import Config, Rig
 config = Config.load("config.toml")
 rig = Rig(config)
 
-# Add empty slot
-slot = rig.add_slot()
+# Request to add plugin (async - waits for WS feedback)
+label = rig.request_add_plugin("http://moddevices.com/plugins/mod-devel/DS1")
 
-# Load plugin into empty slot (auto-connects)
-slot.load_and_connect("http://moddevices.com/plugins/mod-devel/DS1")
+# Request to remove plugin
+rig.request_remove_plugin(label)
 
-# Replace plugin in occupied slot (make-before-break: no audio interruption)
-slot.replace("http://distrho.sf.net/plugins/MVerb")
+# Access plugin controls (after slot is created via WS feedback)
+slot = rig.get_slot_by_label(label)
+if slot:
+    plugin = slot.plugin
+    plugin.set_control("gain", 0.5)
+    plugin.bypass(True)
 
-# Unload plugin but keep empty slot
-slot.unload_plugin()
-
-# Remove slot entirely (connects neighbors first for seamless transition)
-slot.unload()
-
-# Access plugin controls
-plugin = rig[0].plugin
-plugin.set_control("gain", 0.5)
+# Reorder slots (client-controlled)
+rig.move_slot(from_idx=0, to_idx=2)
 
 # Save/load presets
 rig.save_preset("my_preset.json")
 rig.load_preset("my_preset.json")
 
-# Clear all slots
+# Clear all plugins
 rig.clear()
 ```
 
 ## UI Controls
 
-The rig_ui.py GUI provides intuitive controls:
+The `rig_ui.py` GUI provides intuitive controls:
 
-- **Slot Widgets**: Visual representation of each plugin slot in the chain
+- **Slot Widgets**: Visual representation of each plugin in the chain
   - **Right-click context menu**:
-    - **Empty slots**: Load Plugin
-    - **Filled slots**: Replace Plugin, Unload Plugin (Keep Slot)
-    - **All slots**: Remove Slot
+    - Replace Plugin
+    - Remove Plugin
 
 - **Controls Panel**: Displays plugin controls for selected slot
   - Plugin name and bypass toggle
   - Parameter controls in grid layout
-  - All plugin modifications done via slot context menus (no buttons in panel)
 
-## Make-Before-Break Plugin Switching
+- **Add Plugin**: Button to add new plugin (opens selector dialog)
 
-The rig implements seamless plugin switching without audio interruption:
+## WebSocket Callbacks
 
-- **`slot.load_and_connect(uri)`** - Load plugin into empty slot with automatic connection
-- **`slot.replace(uri)`** - Replace plugin with new one: loads new, connects new, removes old
-- **`slot.unload_plugin()`** - Remove plugin only, keep empty slot
-- **`slot.unload()`** - Remove entire slot, connecting neighbors directly for seamless transition
+The rig provides callbacks for UI integration:
 
-This ensures smooth audio flow without gaps or artifacts.
+```python
+rig.set_callbacks(
+    on_param_change=lambda label, symbol, value: ...,
+    on_bypass_change=lambda label, bypassed: ...,
+    on_slot_added=lambda slot: ...,
+    on_slot_removed=lambda label: ...,
+)
+```
 
 ## API
 
@@ -182,24 +207,28 @@ This ensures smooth audio flow without gaps or artifacts.
 
 ### Rig
 
-- `rig.add_slot(position=None)` - Add new empty slot
-- `rig.remove_slot(slot)` - Remove slot from rig (use Slot.unload() instead)
-- `rig.get_slot(uuid)` - Find slot by UUID
-- `rig.clear()` - Clear all slots
+- `rig.request_add_plugin(uri)` - Request to add plugin (returns label or None)
+- `rig.request_remove_plugin(label)` - Request to remove plugin (returns bool)
+- `rig.move_slot(from_idx, to_idx)` - Reorder slots in chain
+- `rig.get_slot_by_label(label)` - Find slot by label
+- `rig.clear()` - Request removal of all plugins
 - `rig.save_preset(path)` - Save rig state to JSON
 - `rig.load_preset(path)` - Load rig state from JSON
-- `rig._reconnect_slot(slot)` - Partial reconnection for single slot (internal, used by make-before-break)
+- `rig.set_callbacks(...)` - Set UI callbacks
 
 ### Slot
 
-- `slot.load(uri)` - Load plugin (removes old first, no auto-connect)
-- `slot.load_and_connect(uri)` - Load plugin into empty slot with automatic connection
-- `slot.load_by_name(name)` - Load plugin by name from config
-- `slot.replace(uri)` - Replace plugin using make-before-break (new connects BEFORE old removes)
-- `slot.unload()` - Remove entire slot, connects neighbors first for seamless transition
-- `slot.unload_plugin()` - Remove plugin only, keep empty slot for later loading
-- `slot.is_empty` - Check if slot has no plugin
-- `slot.index` - Get slot position in rig
+- `slot.label` - Plugin label (unique identifier)
+- `slot.plugin` - The Plugin instance
+- `slot.index` - Position in chain
+- `slot.inputs` / `slot.outputs` - Audio port paths
+
+### Plugin
+
+- `plugin.set_control(symbol, value)` - Set parameter value
+- `plugin.get_control(symbol)` - Get parameter value
+- `plugin.bypass(state)` - Toggle bypass
+- `plugin.controls` - Dict-like access to controls
 
 ### Client (WebSocket)
 
