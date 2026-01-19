@@ -183,13 +183,16 @@ class Rig:
         # This ensures we don't return before receiving all initial plugin/connection messages
         print("Waiting for WebSocket pedalboard ready signal...")
         self.client.ws.wait_pedalboard_ready(timeout=10.0)
-        
+
         # Initialization complete - reconnections will now happen normally
         self._initializing = False
-        # Do final reconnect if we have any slots
+        # NOTE: We do NOT call reconnect() here anymore.
+        # The server already has correct connections - we just observe.
+        # Only move_slot() and explicit user actions should trigger reconnect.
         if self.slots:
-            print("Performing final reconnect after loading...")
-            self.reconnect()
+            print(f"Loaded {len(self.slots)} slots from server (no reconnect)")
+        else:
+            print("No slots loaded from server")
 
         # By default we perform an initial reset and rebuild (preserves previous behaviour).
         # If `reset_on_init` is False, we skip calling `client.reset()` and `reconnect()` so
@@ -303,8 +306,8 @@ class Rig:
         self.slots = new_slots
         print(f"  Reordered slots: {[s.label for s in self.slots]}")
 
-        # Rebuild routing
-        self.reconnect()
+        # Rebuild routing (seamless to avoid audio gap)
+        self.reconnect_seamless()
 
         # Notify external callback
         if self._ext_on_order_change:
@@ -679,8 +682,8 @@ class Rig:
         slot = self.slots.pop(from_idx)
         self.slots.insert(to_idx, slot)
 
-        # Rebuild routing
-        self.reconnect()
+        # Rebuild routing (seamless to avoid audio gap)
+        self.reconnect_seamless()
 
         # Broadcast new order to other clients
         self.broadcast_order()
@@ -707,7 +710,7 @@ class Rig:
     # =========================================================================
 
     def reconnect(self):
-        """Rebuild all connections in the chain."""
+        """Rebuild all connections in the chain (break-before-make, causes audio gap)."""
         print("\n=== RECONNECT ===")
 
         chain = [self.input_slot] + self.slots + [self.output_slot]
@@ -725,6 +728,112 @@ class Rig:
             pass
 
         print("=== RECONNECT DONE ===\n")
+
+    def reconnect_seamless(self):
+        """Rebuild all connections using make-before-break (no audio gap).
+
+        1. Calculate desired connections for new chain
+        2. Connect all new connections first
+        3. Disconnect only connections that are no longer needed
+        """
+        print("\n=== RECONNECT SEAMLESS ===")
+
+        chain = [self.input_slot] + self.slots + [self.output_slot]
+        print(f"Chain: {' -> '.join(repr(s) for s in chain)}")
+
+        # Calculate desired connections
+        desired_connections: set[tuple[str, str]] = set()
+        for i in range(len(chain) - 1):
+            pairs = self._get_connection_pairs(chain[i], chain[i + 1])
+            desired_connections.update(pairs)
+
+        print(f"  Desired connections: {len(desired_connections)}")
+
+        # Calculate all possible connections (current state unknown, so we consider all)
+        all_possible: set[tuple[str, str]] = set()
+        all_outputs = list(self.input_slot.outputs)
+        all_inputs = list(self.output_slot.hw_inputs)
+        for slot in self.slots:
+            all_outputs.extend(slot.outputs)
+            all_inputs.extend(slot.inputs)
+        for out in all_outputs:
+            for inp in all_inputs:
+                all_possible.add((out, inp))
+
+        # Connections to remove = all possible minus desired
+        to_disconnect = all_possible - desired_connections
+
+        # MAKE: Connect all desired (idempotent - server ignores if already connected)
+        print(f"  Connecting {len(desired_connections)} pairs...")
+        for out_path, in_path in desired_connections:
+            try:
+                self.client.effect_connect(out_path, in_path)
+            except Exception:
+                pass
+
+        # BREAK: Disconnect only what's not needed
+        print(f"  Disconnecting {len(to_disconnect)} obsolete pairs...")
+        for out_path, in_path in to_disconnect:
+            try:
+                self.client.effect_disconnect(out_path, in_path)
+            except Exception:
+                pass
+
+        # Update UI positions
+        try:
+            self._layout_plugins()
+        except Exception:
+            pass
+
+        print("=== RECONNECT SEAMLESS DONE ===\n")
+
+    def _get_connection_pairs(self, src, dst) -> list[tuple[str, str]]:
+        """Calculate connection pairs between src and dst (without connecting)."""
+        outputs = src.outputs
+
+        if isinstance(dst, HardwareSlot):
+            inputs = dst.hw_inputs
+        else:
+            inputs = dst.inputs if hasattr(dst, 'inputs') else []
+
+        if not outputs or not inputs:
+            return []
+
+        # Check join flags
+        join_outputs = False
+        join_inputs = False
+
+        if isinstance(src, HardwareSlot):
+            join_outputs = self.config.hardware.join_inputs
+        elif hasattr(src, 'plugin') and src.plugin:
+            src_config = self.config.get_plugin_by_uri(src.plugin.uri)
+            join_outputs = src_config.join_outputs if src_config else False
+
+        if isinstance(dst, HardwareSlot):
+            join_inputs = self.config.hardware.join_outputs
+        elif hasattr(dst, 'plugin') and dst.plugin:
+            dst_config = self.config.get_plugin_by_uri(dst.plugin.uri)
+            join_inputs = dst_config.join_inputs if dst_config else False
+
+        connections = []
+
+        if join_outputs or join_inputs:
+            # All-to-all
+            for out in outputs:
+                for inp in inputs:
+                    connections.append((out, inp))
+        else:
+            # Pair by index
+            for i, out in enumerate(outputs):
+                in_idx = min(i, len(inputs) - 1)
+                connections.append((out, inputs[in_idx]))
+
+            if len(inputs) > len(outputs):
+                last_out = outputs[-1]
+                for inp in inputs[len(outputs):]:
+                    connections.append((last_out, inp))
+
+        return connections
 
     def _reconnect_slot(self, slot: Slot):
         """
