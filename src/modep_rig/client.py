@@ -6,7 +6,7 @@ from urllib.parse import unquote, urlparse
 import requests
 import websocket
 
-__all__ = ["Client"]
+__all__ = ["Client", "WsConnection", "WsClient"]
 
 
 HEADERS = {
@@ -27,46 +27,155 @@ STRUCTURAL_MESSAGES = frozenset(
 )
 
 # Messages to ignore (stats, system info)
-IGNORE_MESSAGES = frozenset(
-    [
-        "stats",
-        "sys_stats",
-    ]
-)
+IGNORE_MESSAGES = frozenset(["stats", "sys_stats", "ping"])
+
+
+class WsConnection:
+    def __init__(
+        self,
+        ws_url: str,
+        on_open: Callable[[], None] | None = None,
+        on_message: Callable[[str], None] | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+        on_close: Callable[[], None] | None = None,
+        reconnect_delay: float = 2.0,
+        auto_reconnect: bool = True,
+    ):
+        self.ws_url = ws_url
+        self._on_open = on_open
+        self._on_message = on_message
+        self._on_error = on_error
+        self._on_close = on_close
+
+        self._reconnect_delay = reconnect_delay
+        self._auto_reconnect = auto_reconnect
+
+        self._ws: websocket.WebSocketApp | None = None
+        self._thread: threading.Thread | None = None
+        self._should_run = False
+        self._connected = threading.Event()
+
+    # ------------------------------------------------------------------ #
+    # Public API
+    # ------------------------------------------------------------------ #
+
+    def connect(self):
+        """Start WebSocket connection in background thread."""
+        if self._thread and self._thread.is_alive():
+            return
+
+        self._should_run = True
+        self._thread = threading.Thread(target=self._run_loop, daemon=True)
+        self._thread.start()
+
+    def disconnect(self):
+        """Stop connection and disable auto-reconnect."""
+        self._should_run = False
+        self._connected.clear()
+        if self._ws:
+            self._ws.close()
+
+    def send(self, message: str) -> bool:
+        """Send raw message over WebSocket."""
+        if not self.is_connected:
+            return False
+        try:
+            self._ws.send(message)
+            return True
+        except Exception as e:
+            if self._on_error:
+                self._on_error(e)
+            return False
+
+    @property
+    def is_connected(self) -> bool:
+        return self._connected.is_set()
+
+    # ------------------------------------------------------------------ #
+    # Internal
+    # ------------------------------------------------------------------ #
+
+    def _run_loop(self):
+        while self._should_run:
+            self._ws = websocket.WebSocketApp(
+                self.ws_url,
+                on_open=self._handle_open,
+                on_message=self._handle_message,
+                on_error=self._handle_error,
+                on_close=self._handle_close,
+            )
+
+            # Blocking call
+            self._ws.run_forever()
+
+            self._connected.clear()
+
+            if not self._should_run or not self._auto_reconnect:
+                break
+
+            time.sleep(self._reconnect_delay)
+
+    # ------------------------------------------------------------------ #
+    # WebSocket callbacks
+    # ------------------------------------------------------------------ #
+
+    def _handle_open(self, ws):
+        self._connected.set()
+        if self._on_open:
+            self._on_open()
+
+    def _handle_message(self, ws, message: str):
+        if self._on_message:
+            self._on_message(message)
+
+    def _handle_error(self, ws, error):
+        if self._on_error:
+            self._on_error(error)
+
+    def _handle_close(self, ws, code, reason):
+        self._connected.clear()
+        if self._on_close:
+            self._on_close()
 
 
 class WsClient:
     def __init__(self, base_url: str):
+        # -------------------
+        # Формування WS URL
         parsed = urlparse(base_url)
         is_secure = parsed.scheme == "https"
         scheme = "wss" if is_secure else "ws"
         hostname = parsed.hostname if parsed.hostname else parsed.path.split(":")[0]
-        # Use same port as REST API (default 80 if not specified)
-
-        if parsed.port:
-            port = parsed.port
-        else:
-            port = 443 if is_secure else 18181
-
+        port = parsed.port or (443 if is_secure else 18181)
         self.ws_url = f"{scheme}://{hostname}:{port}/websocket"
         print("WS:", self.ws_url)
-        self.ws = None
-        self._should_reconnect = True
 
+        # -------------------
         # Callbacks
         self._on_param_change: Callable[[str, str, float], None] | None = None
         self._on_bypass_change: Callable[[str, bool], None] | None = None
         self._on_structural_change: Callable[[str, str], None] | None = None
         self._on_order_change: Callable[[list[str]], None] | None = None
 
-        # Hardware ports discovered via WebSocket
+        # -------------------
+        # Hardware / Pedalboard state
         self._hw_audio_inputs: list[str] = []
         self._hw_audio_outputs: list[str] = []
         self._hw_ready = threading.Event()
-        self._connected = threading.Event()
-        # Signals when initial pedalboard load is complete (loading_end received)
         self._pedalboard_ready = threading.Event()
 
+        # -------------------
+        # Transport layer
+        self.conn = WsConnection(
+            self.ws_url,
+            on_open=self._on_ws_open,
+            on_message=self._on_ws_message,
+            on_error=self._on_ws_error,
+            on_close=self._on_ws_close,
+        )
+
+    # -------------------
+    # Callbacks registration
     def set_callbacks(
         self,
         on_param_change: Callable[[str, str, float], None] | None = None,
@@ -74,108 +183,77 @@ class WsClient:
         on_structural_change: Callable[[str, str], None] | None = None,
         on_order_change: Callable[[list[str]], None] | None = None,
     ):
-        """Set callbacks for WebSocket events.
-
-        Args:
-            on_param_change: Called when parameter changes (label, symbol, value)
-            on_bypass_change: Called when bypass changes (label, bypassed)
-            on_structural_change: Called when structure changes - plugins/connections (msg_type, raw_message)
-            on_order_change: Called when plugin order changes from another client (order list)
-        """
         self._on_param_change = on_param_change
         self._on_bypass_change = on_bypass_change
         self._on_structural_change = on_structural_change
         self._on_order_change = on_order_change
 
-    def on_open(self, ws):
+    # -------------------
+    # WsConnection callbacks
+    def _on_ws_open(self):
         print(f"Підключено до WebSocket: {self.ws_url}")
-        # Reset hardware ports on reconnect
         self._hw_audio_inputs.clear()
         self._hw_audio_outputs.clear()
         self._hw_ready.clear()
         self._pedalboard_ready.clear()
-        self._connected.set()
 
-    def on_message(self, ws, message: str):
-        """Parse and dispatch WebSocket messages."""
+    def _on_ws_message(self, message: str):
         parts = message.split()
         if not parts:
             return
-
         msg_type = parts[0]
 
-        # Ignore stats messages
         if msg_type in IGNORE_MESSAGES:
             return
 
-        # Hardware port discovery: add_hw_port /graph/capture_1 audio 0 Capture 0
-        # Format: add_hw_port /graph/<port_name> <type> <is_output> <name> <cv_flag>
-        # MOD-UI perspective (graph-centric):
-        #   is_output=0: port is INPUT to graph (capture - audio enters graph from hardware)
-        #   is_output=1: port is OUTPUT from graph (playback - audio exits graph to hardware)
+        # Hardware port discovery
         if msg_type == "add_hw_port" and len(parts) >= 5:
-            port_path = parts[1]  # /graph/capture_1
-            port_type = parts[2]  # audio or midi
+            port_path = parts[1]
+            port_type = parts[2]
             is_graph_output = parts[3] == "1"
 
             if port_type == "audio" and port_path.startswith("/graph/"):
-                port_name = port_path[7:]  # Remove "/graph/"
+                port_name = port_path[7:]
                 if is_graph_output:
-                    # Graph output = playback = audio OUTPUT from our rig to speakers
                     if port_name not in self._hw_audio_outputs:
                         self._hw_audio_outputs.append(port_name)
                         print(f"WS << HW output: {port_name}")
                 else:
-                    # Graph input = capture = audio INPUT to our rig from mic/guitar
                     if port_name not in self._hw_audio_inputs:
                         self._hw_audio_inputs.append(port_name)
                         print(f"WS << HW input: {port_name}")
             return
 
-        # loading_end signals that all hardware ports have been reported
         if msg_type == "loading_end":
             if not self._hw_ready.is_set():
                 self._hw_ready.set()
-                print(
-                    f"WS << Hardware ports ready: inputs={self._hw_audio_inputs}, outputs={self._hw_audio_outputs}"
-                )
             if not self._pedalboard_ready.is_set():
                 self._pedalboard_ready.set()
-                print("WS << Pedalboard loading complete")
+            print("WS << Pedalboard loading complete")
             return
 
-        # Structural changes - plugins, connections, pedalboard
         if msg_type in STRUCTURAL_MESSAGES:
-            print(f"WS << {message}")
             if self._on_structural_change:
                 self._on_structural_change(msg_type, message)
             return
 
-        # Parameter change: param_set /graph/label symbol value
         if msg_type == "param_set" and len(parts) >= 4:
-            # Format: param_set /graph/BigMuffPi ORDER:A:B:C 1.000000
-            graph_path = parts[1]  # /graph/BigMuffPi
-            symbol = parts[2]  # ORDER:A:B:C or freq
+            graph_path = parts[1]
+            symbol = parts[2]
             try:
                 value = float(parts[3])
             except ValueError:
                 return
 
-            # Parse label from path: /graph/label -> label
             if graph_path.startswith("/graph/"):
-                label = graph_path[7:]  # Remove "/graph/"
+                label = graph_path[7:]
 
-                # Check for ORDER broadcast: param_set /graph/X ORDER:a:b:c 1.0
                 if symbol.startswith("ORDER:"):
-                    order = symbol.split(":")[1:]  # ["a", "b", "c"]
-                    print(f"WS << ORDER: {order}")
+                    order = symbol.split(":")[1:]
                     if self._on_order_change:
                         self._on_order_change(order)
                     return
 
-                print(f"WS << {message}")
-
-                # Check if it's bypass
                 if symbol == ":bypass":
                     if self._on_bypass_change:
                         self._on_bypass_change(label, value > 0.5)
@@ -184,159 +262,68 @@ class WsClient:
                         self._on_param_change(label, symbol, value)
             return
 
-        # Output parameter (for future use)
-        if msg_type == "output" and len(parts) >= 4:
-            # output /graph/label symbol value
-            # TODO: implement output parameter handling
-            pass
-
         # Log unknown messages
         print(f"WS << {message}")
 
-    def on_error(self, ws, error):
+    def _on_ws_error(self, error):
         print(f"WS Помилка: {error}")
 
-    def on_close(self, ws, close_status_code, close_msg):
+    def _on_ws_close(self):
         print("🔌 WebSocket з'єднання закрито")
-        self._connected.clear()
-        if self._should_reconnect:
-            print("🔄 Спроба відновлення через 2 секунди...")
-            time.sleep(2)
 
+    # -------------------
+    # Public API
     def connect(self):
-        """Запуск клієнта у фоновому потоці з авто-реконнектом."""
-
-        def run_loop():
-            while self._should_reconnect:
-                self.ws = websocket.WebSocketApp(
-                    self.ws_url,
-                    on_open=self.on_open,
-                    on_message=self.on_message,
-                    on_error=self.on_error,
-                    on_close=self.on_close,
-                )
-                # run_forever блокує потік, поки з'єднання живе
-                self.ws.run_forever()
-
-                if not self._should_reconnect:
-                    break
-                time.sleep(1)  # Невелика пауза перед наступною спробою підключення
-
-        thread = threading.Thread(target=run_loop, daemon=True)
-        thread.start()
+        self.conn.connect()
 
     def disconnect(self):
-        """Метод для коректного закриття без реконнекту."""
-        self._should_reconnect = False
-        if self.ws:
-            self.ws.close()
+        self.conn.disconnect()
 
-    def effect_parameter_set(self, label: str, symbol: str, value):
-        """Send parameter change via WebSocket."""
-        if self.ws and self.ws.sock and self.ws.sock.connected:
-            command = f"param_set /graph/{label}/{symbol} {value}"
-            try:
-                print(f"WS >> {command}")
-                self.ws.send(command)
-                return True
-            except Exception as e:
-                print(f"⚠️ Помилка відправки: {e}")
+    def effect_parameter_set(self, label: str, symbol: str, value) -> bool:
+        command = f"param_set /graph/{label}/{symbol} {value}"
+        if self.conn.is_connected:
+            print(f"WS >> {command}")
+            return self.conn.send(command)
         return False
 
-    def effect_bypass(self, label: str, bypass: bool):
-        value = 1 if bypass else 0
-        return self.effect_parameter_set(label, ":bypass", value)
+    def effect_bypass(self, label: str, bypass: bool) -> bool:
+        return self.effect_parameter_set(label, ":bypass", 1 if bypass else 0)
 
     def plugin_position(self, label: str, x: float, y: float) -> bool:
-        """Send plugin position update via WebSocket using `plugin_pos` command.
+        command = f"plugin_pos /graph/{label} {float(x)} {float(y)}"
+        if self.conn.is_connected:
+            print(f"WS >> {command}")
+            return self.conn.send(command)
+        return False
 
-        Format: plugin_pos /graph/<label> <x> <y>
-        """
-        if self.ws and self.ws.sock and self.ws.sock.connected:
-            # Use float formatting with high precision to mimic UI
-            command = f"plugin_pos /graph/{label} {float(x)} {float(y)}"
-            try:
-                print(f"WS >> {command}")
-                self.ws.send(command)
-                return True
-            except Exception as e:
-                print(f"⚠️ Помилка відправки plugin_pos: {e}")
+    def broadcast_order(self, order: list[str], carrier_label: str) -> bool:
+        order_str = ":".join(["ORDER"] + order)
+        command = f"param_set /graph/{carrier_label}/{order_str} 1.0"
+        if self.conn.is_connected:
+            print(f"WS >> {command}")
+            return self.conn.send(command)
         return False
 
     def get_hardware_ports(self, timeout: float = 5.0) -> tuple[list[str], list[str]]:
-        """Get discovered hardware ports.
-
-        Args:
-            timeout: Max time to wait for ports discovery (seconds)
-
-        Returns:
-            Tuple of (inputs, outputs) port name lists
-        """
-        # First wait for WebSocket connection
-        if not self._connected.wait(timeout):
-            print(f"⚠️ WebSocket not connected after {timeout}s")
+        if not self.conn._connected.wait(timeout):
+            print(f"⚠️ WS not connected after {timeout}s")
             return [], []
-
-        # Then wait for hardware ports to be discovered
-        if not self._hw_ready.wait(timeout):
-            print(
-                f"⚠️ Hardware ports not ready after {timeout}s, using discovered so far"
-            )
-
+        self._hw_ready.wait(timeout)
         return list(self._hw_audio_inputs), list(self._hw_audio_outputs)
 
     def wait_pedalboard_ready(self, timeout: float = 10.0) -> bool:
-        """Wait for pedalboard loading to complete (loading_end message).
-
-        Args:
-            timeout: Max time to wait (seconds)
-
-        Returns:
-            True if pedalboard ready, False if timeout
-        """
         if self._pedalboard_ready.wait(timeout):
-            print("✓ Pedalboard ready")
             return True
-        else:
-            print(f"⚠️ Pedalboard not ready after {timeout}s, proceeding anyway")
-            return False
+        print(f"⚠️ Pedalboard not ready after {timeout}s")
+        return False
 
     @property
     def hw_inputs(self) -> list[str]:
-        """Hardware audio inputs (capture ports)."""
         return list(self._hw_audio_inputs)
 
     @property
     def hw_outputs(self) -> list[str]:
-        """Hardware audio outputs (playback ports)."""
         return list(self._hw_audio_outputs)
-
-    def broadcast_order(self, order: list[str], carrier_label: str) -> bool:
-        """Broadcast plugin order to all connected clients.
-
-        Uses a hack: sends fake param_set with ORDER encoded in port path.
-        Format: param_set /graph/{carrier_label}/ORDER:{label1}:{label2}:... 1.0
-
-        Args:
-            order: List of plugin labels in desired order
-            carrier_label: Label of an existing plugin to use as carrier
-                          (must exist on the pedalboard)
-
-        Returns:
-            True if sent successfully
-        """
-        if not (self.ws and self.ws.sock and self.ws.sock.connected):
-            return False
-
-        order_str = ":".join(["ORDER"] + order)  # "ORDER:a:b:c"
-        command = f"param_set /graph/{carrier_label}/{order_str} 1.0"
-        try:
-            print(f"WS >> {command}")
-            self.ws.send(command)
-            return True
-        except Exception as e:
-            print(f"⚠️ Помилка broadcast_order: {e}")
-            return False
 
 
 class Client:
