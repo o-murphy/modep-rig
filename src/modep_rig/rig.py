@@ -156,6 +156,7 @@ class Rig:
             on_structural_change=self._on_structural_change,
         )
 
+        # FIXME: maybe not needed due to auto init on websocket messages
         # Initial reset
         self.client.reset()
         self.reconnect()
@@ -246,11 +247,22 @@ class Rig:
             # parts[0] = "add"
             # parts[1] = instance (e.g., "/graph/DS1_1")
             # parts[2] = uri
+            # parts[3] = x, parts[4] = y (optional)
             instance = parts[1]
             uri = parts[2]
+            x = None
+            y = None
+            if len(parts) >= 5:
+                try:
+                    x = float(parts[3])
+                    y = float(parts[4])
+                except Exception:
+                    x = None
+                    y = None
+
             if instance.startswith("/graph/"):
                 label = instance[7:]
-                self._on_plugin_added(label, uri)
+                self._on_plugin_added(label, uri, x, y)
 
         elif msg_type == "remove" and len(parts) >= 2:
             # remove /graph/label
@@ -263,15 +275,71 @@ class Rig:
             # Full pedalboard change - rebuild everything
             self._on_pedalboard_reset()
 
-    def _on_plugin_added(self, label: str, uri: str):
+    def _on_plugin_added(self, label: str, uri: str, x: float | None = None, y: float | None = None):
         """
         Handle plugin added via WebSocket feedback.
 
         Creates Slot, fetches port info, connects to chain.
         """
         # Перевіряємо чи такий слот вже існує
-        if self._find_slot_by_label(label):
-            print(f"  Slot {label} already exists, skipping")
+        existing = self._find_slot_by_label(label)
+        if existing:
+            # Якщо слот вже існує — оновлюємо його метадані (uri, name, порти, контролі)
+            print(f"  Slot {label} already exists, updating metadata")
+
+            # Отримуємо інформацію про порти
+            effect_data = self.client.effect_get(uri)
+            if not effect_data:
+                print(f"  Failed to get effect data for {uri}")
+                return
+
+            all_inputs = []
+            all_outputs = []
+            ports = effect_data.get("ports", {})
+            audio_ports = ports.get("audio", {})
+
+            for p in audio_ports.get("input", []):
+                all_inputs.append(Port(
+                    symbol=p["symbol"],
+                    name=p.get("name", p["symbol"]),
+                    graph_path=f"{label}/{p['symbol']}"
+                ))
+            for p in audio_ports.get("output", []):
+                all_outputs.append(Port(
+                    symbol=p["symbol"],
+                    name=p.get("name", p["symbol"]),
+                    graph_path=f"{label}/{p['symbol']}"
+                ))
+
+            # Apply port overrides from config
+            plugin_config = self.config.get_plugin_by_uri(uri)
+            if plugin_config and plugin_config.inputs is not None:
+                inputs = [p for p in all_inputs if p.symbol in plugin_config.inputs]
+            else:
+                inputs = all_inputs
+
+            if plugin_config and plugin_config.outputs is not None:
+                outputs = [p for p in all_outputs if p.symbol in plugin_config.outputs]
+            else:
+                outputs = all_outputs
+
+            # Update existing plugin
+            plugin = existing.plugin
+            plugin.uri = uri
+            plugin.name = effect_data.get("name", label)
+            plugin.inputs = inputs
+            plugin.outputs = outputs
+            plugin._load_controls(effect_data)
+
+            # update UI position if provided
+            if x is not None:
+                plugin.ui_x = x
+            if y is not None:
+                plugin.ui_y = y
+
+            # Notify UI about potential metadata changes
+            if self._ext_on_slot_added:
+                self._ext_on_slot_added(existing)
             return
 
         # Перевіряємо whitelist
@@ -338,26 +406,43 @@ class Rig:
         slot = Slot(self, plugin)
         plugin.slot = slot
 
-        # Додаємо в кінець ланцюга
-        self.slots.append(slot)
+        # Determine insert index: use pending_inserts (client-requested), else use x coordinate from UI, else append
+        desired_idx = None
+        if label in self._pending_inserts:
+            desired_idx = self._pending_inserts.pop(label)
+        elif x is not None:
+            # find first slot with ui_x greater than x
+            insert_at = len(self.slots)
+            for i, s in enumerate(self.slots):
+                sx = getattr(s.plugin, "ui_x", None)
+                if sx is None:
+                    continue
+                if sx > x:
+                    insert_at = i
+                    break
+            desired_idx = insert_at
+
+        if desired_idx is None:
+            # append to end
+            self.slots.append(slot)
+        else:
+            if desired_idx < 0:
+                desired_idx = 0
+            if desired_idx > len(self.slots):
+                desired_idx = len(self.slots)
+            self.slots.insert(desired_idx, slot)
         print(f"  Created slot: {slot}")
+
+        # Store UI position on plugin for future ordering
+        if x is not None:
+            slot.plugin.ui_x = x
+        if y is not None:
+            slot.plugin.ui_y = y
 
         # Підключаємо до ланцюга
         self._reconnect_slot(slot)
 
-        # If there was a pending insert index for this label (replace behavior), move it
-        desired_idx = self._pending_inserts.pop(label, None)
-        if desired_idx is not None:
-            try:
-                current_idx = self.slots.index(slot)
-                if desired_idx < 0:
-                    desired_idx = 0
-                if desired_idx >= len(self.slots):
-                    desired_idx = len(self.slots) - 1
-                if current_idx != desired_idx:
-                    self.move_slot(current_idx, desired_idx)
-            except Exception:
-                pass
+        # If there was a pending insert index for this label (replace behavior) we already handled it above
 
         # Сповіщуємо UI
         if self._ext_on_slot_added:
