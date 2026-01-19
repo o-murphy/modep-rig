@@ -10,6 +10,7 @@ OnParamChangeCallback = Callable[[str, str, float], None]  # label, symbol, valu
 OnBypassChangeCallback = Callable[[str, bool], None]  # label, bypassed
 OnSlotAddedCallback = Callable[["Slot"], None]  # slot
 OnSlotRemovedCallback = Callable[[str], None]  # label
+OnOrderChangeCallback = Callable[[list[str]], None]  # order (list of labels)
 
 
 __all__ = ["Slot", "HardwareSlot", "Rig"]
@@ -156,12 +157,14 @@ class Rig:
         self._ext_on_bypass_change: OnBypassChangeCallback | None = None
         self._ext_on_slot_added: OnSlotAddedCallback | None = None
         self._ext_on_slot_removed: OnSlotRemovedCallback | None = None
+        self._ext_on_order_change: OnOrderChangeCallback | None = None
 
         # Setup WebSocket callbacks BEFORE connecting so we don't miss initial messages
         self.client.ws.set_callbacks(
             on_param_change=self._on_param_change,
             on_bypass_change=self._on_bypass_change,
             on_structural_change=self._on_structural_change,
+            on_order_change=self._on_order_change,
         )
 
         # If the client was created with connect=False we need to start it now so the
@@ -230,12 +233,14 @@ class Rig:
         on_bypass_change: OnBypassChangeCallback | None = None,
         on_slot_added: OnSlotAddedCallback | None = None,
         on_slot_removed: OnSlotRemovedCallback | None = None,
+        on_order_change: OnOrderChangeCallback | None = None,
     ):
         """Set external callbacks for UI updates."""
         self._ext_on_param_change = on_param_change
         self._ext_on_bypass_change = on_bypass_change
         self._ext_on_slot_added = on_slot_added
         self._ext_on_slot_removed = on_slot_removed
+        self._ext_on_order_change = on_order_change
 
     # =========================================================================
     # WebSocket event handlers (Server-as-Source-of-Truth)
@@ -268,6 +273,42 @@ class Rig:
             plugin._bypassed = bypassed
             if self._ext_on_bypass_change:
                 self._ext_on_bypass_change(label, bypassed)
+
+    def _on_order_change(self, order: list[str]):
+        """Handle order change broadcast from another client.
+
+        Reorders local slots to match the received order.
+        Only reorders slots that exist locally.
+        """
+        print(f"Rig << ORDER: {order}")
+
+        # Build a mapping of label -> slot for quick lookup
+        slot_map = {slot.label: slot for slot in self.slots}
+
+        # Reorder slots based on received order
+        new_slots = []
+        for label in order:
+            if label in slot_map:
+                new_slots.append(slot_map[label])
+                del slot_map[label]
+
+        # Append any remaining slots that weren't in the order
+        new_slots.extend(slot_map.values())
+
+        # Check if order actually changed
+        if [s.label for s in self.slots] == [s.label for s in new_slots]:
+            print("  Order unchanged, skipping")
+            return
+
+        self.slots = new_slots
+        print(f"  Reordered slots: {[s.label for s in self.slots]}")
+
+        # Rebuild routing
+        self.reconnect()
+
+        # Notify external callback
+        if self._ext_on_order_change:
+            self._ext_on_order_change(order)
 
     def _on_structural_change(self, msg_type: str, raw_message: str):
         """
@@ -640,6 +681,26 @@ class Rig:
 
         # Rebuild routing
         self.reconnect()
+
+        # Broadcast new order to other clients
+        self.broadcast_order()
+
+    def broadcast_order(self) -> bool:
+        """Broadcast current slot order to all connected clients.
+
+        Uses the first slot's label as carrier (required for the param_set hack).
+
+        Returns:
+            True if broadcast was sent successfully
+        """
+        if not self.slots:
+            print("No slots to broadcast order")
+            return False
+
+        order = [slot.label for slot in self.slots]
+        carrier_label = self.slots[0].label
+
+        return self.client.ws.broadcast_order(order, carrier_label)
 
     # =========================================================================
     # Routing

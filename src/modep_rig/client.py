@@ -53,6 +53,7 @@ class WsClient:
         self._on_param_change: Callable[[str, str, float], None] | None = None
         self._on_bypass_change: Callable[[str, bool], None] | None = None
         self._on_structural_change: Callable[[str, str], None] | None = None
+        self._on_order_change: Callable[[list[str]], None] | None = None
 
         # Hardware ports discovered via WebSocket
         self._hw_audio_inputs: list[str] = []
@@ -67,6 +68,7 @@ class WsClient:
         on_param_change: Callable[[str, str, float], None] | None = None,
         on_bypass_change: Callable[[str, bool], None] | None = None,
         on_structural_change: Callable[[str, str], None] | None = None,
+        on_order_change: Callable[[list[str]], None] | None = None,
     ):
         """Set callbacks for WebSocket events.
 
@@ -74,10 +76,12 @@ class WsClient:
             on_param_change: Called when parameter changes (label, symbol, value)
             on_bypass_change: Called when bypass changes (label, bypassed)
             on_structural_change: Called when structure changes - plugins/connections (msg_type, raw_message)
+            on_order_change: Called when plugin order changes from another client (order list)
         """
         self._on_param_change = on_param_change
         self._on_bypass_change = on_bypass_change
         self._on_structural_change = on_structural_change
+        self._on_order_change = on_order_change
 
     def on_open(self, ws):
         print(f"Підключено до WebSocket: {self.ws_url}")
@@ -143,9 +147,9 @@ class WsClient:
 
         # Parameter change: param_set /graph/label symbol value
         if msg_type == "param_set" and len(parts) >= 4:
-            # Format: param_set /graph/autowah_1 freq 0.261719
-            graph_path = parts[1]  # /graph/autowah_1
-            symbol = parts[2]       # freq
+            # Format: param_set /graph/BigMuffPi ORDER:A:B:C 1.000000
+            graph_path = parts[1]  # /graph/BigMuffPi
+            symbol = parts[2]       # ORDER:A:B:C or freq
             try:
                 value = float(parts[3])
             except ValueError:
@@ -154,6 +158,15 @@ class WsClient:
             # Parse label from path: /graph/label -> label
             if graph_path.startswith("/graph/"):
                 label = graph_path[7:]  # Remove "/graph/"
+
+                # Check for ORDER broadcast: param_set /graph/X ORDER:a:b:c 1.0
+                if symbol.startswith("ORDER:"):
+                    order = symbol.split(":")[1:]  # ["a", "b", "c"]
+                    print(f"WS << ORDER: {order}")
+                    if self._on_order_change:
+                        self._on_order_change(order)
+                    return
+
                 print(f"WS << {message}")
 
                 # Check if it's bypass
@@ -288,6 +301,33 @@ class WsClient:
     def hw_outputs(self) -> list[str]:
         """Hardware audio outputs (playback ports)."""
         return list(self._hw_audio_outputs)
+    
+    def broadcast_order(self, order: list[str], carrier_label: str) -> bool:
+        """Broadcast plugin order to all connected clients.
+
+        Uses a hack: sends fake param_set with ORDER encoded in port path.
+        Format: param_set /graph/{carrier_label}/ORDER:{label1}:{label2}:... 1.0
+
+        Args:
+            order: List of plugin labels in desired order
+            carrier_label: Label of an existing plugin to use as carrier
+                          (must exist on the pedalboard)
+
+        Returns:
+            True if sent successfully
+        """
+        if not (self.ws and self.ws.sock and self.ws.sock.connected):
+            return False
+
+        order_str = ":".join(["ORDER"] + order)  # "ORDER:a:b:c"
+        command = f"param_set /graph/{carrier_label}/{order_str} 1.0"
+        try:
+            print(f"WS >> {command}")
+            self.ws.send(command)
+            return True
+        except Exception as e:
+            print(f"⚠️ Помилка broadcast_order: {e}")
+            return False
 
 
 class Client:

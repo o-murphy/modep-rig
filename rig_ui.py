@@ -45,6 +45,7 @@ class RigSignals(QObject):
     bypass_changed = Signal(str, bool)  # label, bypassed
     slot_added = Signal(object)  # slot
     slot_removed = Signal(str)  # label
+    order_changed = Signal(list)  # order (list of labels)
 
 
 class ControlWidget(QWidget):
@@ -554,6 +555,7 @@ class MainWindow(QMainWindow):
         self.rig_signals.bypass_changed.connect(self._on_ws_bypass_changed)
         self.rig_signals.slot_added.connect(self._on_ws_slot_added)
         self.rig_signals.slot_removed.connect(self._on_ws_slot_removed)
+        self.rig_signals.order_changed.connect(self._on_ws_order_changed)
 
         # Connect rig callbacks to emit signals
         self.rig.set_callbacks(
@@ -561,6 +563,7 @@ class MainWindow(QMainWindow):
             on_bypass_change=lambda label, bp: self.rig_signals.bypass_changed.emit(label, bp),
             on_slot_added=lambda slot: self.rig_signals.slot_added.emit(slot),
             on_slot_removed=lambda label: self.rig_signals.slot_removed.emit(label),
+            on_order_change=lambda order: self.rig_signals.order_changed.emit(order),
         )
 
         self.setWindowTitle("MODEP Rig Controller")
@@ -739,6 +742,11 @@ class MainWindow(QMainWindow):
     def _on_ws_slot_removed(self, label: str):
         """Handle slot removed from WebSocket - rebuild UI."""
         print(f"UI: Slot removed: {label}")
+        self._rebuild_slot_widgets()
+
+    def _on_ws_order_changed(self, order: list):
+        """Handle order change from WebSocket - rebuild UI."""
+        print(f"UI: Order changed: {order}")
         self._rebuild_slot_widgets()
 
     def closeEvent(self, event):
