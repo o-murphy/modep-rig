@@ -32,7 +32,7 @@ class Slot:
     Slot ідентифікується по label плагіна.
     """
 
-    def __init__(self, rig: "Rig", plugin: Plugin):
+    def __init__(self, plugin: Plugin):
         """
         Створює слот з плагіном.
 
@@ -40,7 +40,6 @@ class Slot:
             rig: Батьківський Rig
             plugin: Плагін (обов'язковий)
         """
-        self.rig = rig
         self.plugin = plugin
 
     @property
@@ -49,28 +48,12 @@ class Slot:
         return self.plugin.label
 
     @property
-    def index(self) -> int:
-        """Поточна позиція слота в ланцюгу (динамічно обчислюється)."""
-        try:
-            return self.rig.slots.index(self)
-        except ValueError:
-            return -1
-
-    @property
     def inputs(self) -> list[str]:
         return [p.graph_path for p in self.plugin.inputs]
 
     @property
     def outputs(self) -> list[str]:
         return [p.graph_path for p in self.plugin.outputs]
-
-    @property
-    def is_stereo(self) -> bool:
-        """Визначає чи слот працює в стерео режимі."""
-        plugin_config = self.rig.config.get_plugin_by_uri(self.plugin.uri)
-        if plugin_config and plugin_config.mode:
-            return plugin_config.mode == "stereo"
-        return len(self.plugin.outputs) >= 2
 
     @staticmethod
     def _label_from_uri(uri: str) -> str:
@@ -86,8 +69,7 @@ class Slot:
 class HardwareSlot:
     """Hardware I/O слот (capture/playback)."""
 
-    def __init__(self, rig: "Rig", ports: list[str], is_input: bool):
-        self.rig = rig
+    def __init__(self, ports: list[str], is_input: bool):
         self._ports = ports
         self._is_input = is_input
 
@@ -104,10 +86,6 @@ class HardwareSlot:
     def hw_inputs(self) -> list[str]:
         """Входи hardware output slot (playback порти)."""
         return self._ports if not self._is_input else []
-
-    @property
-    def is_stereo(self) -> bool:
-        return len(self._ports) >= 2
 
     def __repr__(self):
         kind = "Input" if self._is_input else "Output"
@@ -143,8 +121,8 @@ class Rig:
         # Determine hardware ports (auto-detect or from config)
         hw_inputs, hw_outputs = self._resolve_hardware_ports()
 
-        self.input_slot = HardwareSlot(self, ports=hw_inputs, is_input=True)
-        self.output_slot = HardwareSlot(self, ports=hw_outputs, is_input=False)
+        self.input_slot = HardwareSlot(ports=hw_inputs, is_input=True)
+        self.output_slot = HardwareSlot(ports=hw_outputs, is_input=False)
 
         # Slots list - порядок визначається по координатах (x, y)
         self.slots: list[Slot] = []
@@ -600,7 +578,7 @@ class Rig:
 
         # Створюємо плагін
         plugin = Plugin(
-            slot=None,  # Буде встановлено після створення Slot
+            client=self.client,  # Буде встановлено після створення Slot
             uri=uri,
             label=label,
             name=effect_data.get("name", label),
@@ -610,8 +588,7 @@ class Rig:
         plugin._load_controls(effect_data)
 
         # Створюємо слот
-        slot = Slot(self, plugin)
-        plugin.slot = slot
+        slot = Slot(plugin)
 
         # Store UI position on plugin
         slot.plugin.ui_x = x if x is not None else 0
@@ -620,7 +597,7 @@ class Rig:
         # Add slot and sort by position
         self.slots.append(slot)
         self.slots = self._sort_slots_by_position(self.slots)
-        print(f"  Created slot: {slot} at index {slot.index} (pos: {x}, {y})")
+        print(f"  Created slot: {slot} at index {self.slots.index(slot)} (pos: {x}, {y})")
 
         # Connect into chain UNLESS we're still initializing
         if self._initializing:
@@ -645,7 +622,7 @@ class Rig:
             print(f"  Slot {label} not found, skipping")
             return
 
-        slot_idx = slot.index
+        slot_idx = self.slots.index(slot)
 
         # Знаходимо сусідів
         src = self.input_slot
@@ -969,7 +946,7 @@ class Rig:
         1. Connect new slot into chain
         2. Disconnect old direct path
         """
-        slot_idx = slot.index
+        slot_idx = self.slots.index(slot)
         if slot_idx < 0:
             return
 

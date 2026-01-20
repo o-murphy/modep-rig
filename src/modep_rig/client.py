@@ -1,3 +1,4 @@
+from collections import defaultdict
 from dataclasses import dataclass
 import time
 import threading
@@ -276,6 +277,9 @@ class WsClient:
         self._on_order_change: Callable[[list[str]], None] | None = None
         self._on_position_change: Callable[[str, float, float], None] | None = None
 
+        self._listeners: dict[type, set[Callable]] = defaultdict(set)
+        self._lock = threading.RLock()
+
         # Hardware / Pedalboard state
         self._hw_audio_inputs: list[str] = []
         self._hw_audio_outputs: list[str] = []
@@ -290,6 +294,21 @@ class WsClient:
             on_error=self._on_ws_error,
             on_close=self._on_ws_close,
         )
+
+    def on(self, event_type: type, cb: Callable):
+        with self._lock:
+            self._listeners[event_type].add(cb)
+
+    def off(self, event_type: type, cb: Callable):
+        with self._lock:
+            self._listeners[event_type].discard(cb)
+
+    def _dispatch(self, event):
+        with self._lock:
+            listeners = list(self._listeners.get(type(event), ()))
+
+        for cb in listeners:
+            cb(event)
 
     # -------------------
     # Callbacks registration
@@ -320,6 +339,9 @@ class WsClient:
         event = WsProtocol.parse(message)
         if not event:
             return
+
+        # dispatch    
+        self._dispatch(event)
 
         match event:
             case HwPort(name=name, is_output=is_output):
@@ -377,7 +399,7 @@ class WsClient:
     def disconnect(self):
         self.conn.disconnect()
 
-    def effect_parameter_set(self, label: str, symbol: str, value) -> bool:
+    def effect_param_set(self, label: str, symbol: str, value) -> bool:
         command = f"param_set /graph/{label}/{symbol} {value}"
         if self.conn.is_connected:
             print(f"WS >> {command}")
@@ -385,7 +407,7 @@ class WsClient:
         return False
 
     def effect_bypass(self, label: str, bypass: bool) -> bool:
-        return self.effect_parameter_set(label, ":bypass", 1 if bypass else 0)
+        return self.effect_param_set(label, ":bypass", 1 if bypass else 0)
 
     def plugin_position(self, label: str, x: float, y: float) -> bool:
         command = f"plugin_pos /graph/{label} {float(x)} {float(y)}"

@@ -692,7 +692,7 @@ class MainWindow(QMainWindow):
         if dialog.exec() == QDialog.Accepted and dialog.selected_uri:
             # Preserve slot index: remove old, then request add at same index
             slot = self.rig.get_slot_by_label(label)
-            insert_idx = slot.index if slot else None
+            insert_idx = self.rig.slots.index(slot) if slot else None
             # Request remove first
             self.rig.request_remove_plugin(label)
             # Request add at the same index (will be moved when WS feedback arrives)
@@ -715,7 +715,7 @@ class MainWindow(QMainWindow):
         src_slot = self.rig.get_slot_by_label(src_label)
         if not src_slot:
             return
-        from_idx = src_slot.index
+        from_idx = self.rig.slots.index(src_slot)
         to_idx = dest_index
         print(f"ON_SLOT_DROPPED: from_idx={from_idx} to_idx={to_idx}")
         if from_idx == to_idx:

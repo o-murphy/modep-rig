@@ -10,10 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Iterator
 
+from modep_rig.client import Client
 from modep_rig.controls import ControlPort, parse_control_ports
-
-if TYPE_CHECKING:
-    from modep_rig.rig import Slot
 
 
 __all__ = ["Port", "Plugin", "ChannelType"]
@@ -101,7 +99,7 @@ class ControlsProxy:
         control.value = value  # This clamps the value
 
         # Sync to API via POST
-        self._plugin._set_parameter(symbol, control.value)
+        self._plugin._set_param(symbol, control.value)
 
     def __getattr__(self, symbol: str) -> ControlPort:
         """Allow attribute-style access: controls.Dist"""
@@ -156,14 +154,14 @@ class Plugin:
 
     def __init__(
         self,
-        slot: "Slot",
+        client: Client,
         uri: str,
         label: str,
         name: str,
         inputs: list[Port],
         outputs: list[Port],
     ):
-        self.slot = slot
+        self.client = client
         self.uri = uri
         self.label = label
         self.name = name
@@ -177,15 +175,9 @@ class Plugin:
         controls = parse_control_ports(effect_data)
         self.controls._populate(controls)
 
-    def _set_parameter(self, symbol: str, value: float) -> bool:
+    def _set_param(self, symbol: str, value: float) -> bool:
         """Set parameter via Client API."""
-        # return self.slot.rig.client.effect_parameter_set(self.label, symbol, value)
-        return self.slot.rig.client.ws.effect_parameter_set(self.label, symbol, value)
-
-    def _set_bypass(self, enabled: bool) -> bool:
-        """Set bypass via Client API."""
-        # return self.slot.rig.client.effect_bypass(self.label, enabled)
-        return self.slot.rig.client.ws.effect_bypass(self.label, enabled)
+        return self.client.ws.effect_param_set(self.label, symbol, value)
 
     # --- Dict-like access to control values ---
 
@@ -211,8 +203,8 @@ class Plugin:
         return self._bypassed
 
     def bypass(self, enabled: bool = True) -> bool:
-        """Enable/disable bypass for this plugin."""
-        return self._set_bypass(enabled)
+        """Enable/disable bypass for this plugin. Set bypass via Client API."""
+        return self.client.ws.effect_bypass(self.label, enabled)
 
     def set_control_value(self, symbol: str, value: float) -> None:
         """Set control value locally without API call (for WS sync)."""
