@@ -1,5 +1,8 @@
 from typing import Callable, SupportsIndex
 
+import secrets
+import string
+
 from modep_rig.config import Config, PluginConfig
 from modep_rig.client import Client
 from modep_rig.plugin import Plugin, Port
@@ -146,8 +149,6 @@ class Rig:
         # Slots list - порядок контролюється клієнтом
         self.slots: list[Slot] = []
 
-        # Label counter for unique labels
-        self._label_counter = 0
         # Pending inserts mapping: label -> desired insert index (used for replace)
         self._pending_inserts: dict[str, int] = {}
 
@@ -589,8 +590,9 @@ class Rig:
     def _generate_label(self, uri: str) -> str:
         """Generate unique label for plugin."""
         base = Slot._label_from_uri(uri)
-        self._label_counter += 1
-        return f"{base}_{self._label_counter}"
+        alphabet = string.ascii_letters + string.digits
+        uid = ''.join(secrets.choice(alphabet) for _ in range(8))
+        return f"{base}_{uid}"
 
     def request_add_plugin(self, uri: str, x: int = 500, y: int = 400) -> str | None:
         """

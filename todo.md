@@ -2,8 +2,6 @@
 
 ## Future
 
-- [ ] Master-slave для multi-client
-- [ ] Micropython сумісність
 - [ ] MIDI routing
 - [ ] Output parameters
 - [ ] Replace plugin with position preservation
