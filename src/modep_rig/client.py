@@ -69,6 +69,13 @@ class OrderChange:
 
 
 @dataclass
+class PositionChange:
+    label: str
+    x: float
+    y: float
+
+
+@dataclass
 class StructuralChange:
     msg_type: str
     raw_message: str
@@ -77,7 +84,7 @@ class StructuralChange:
 # --------------------
 # Union of all possible events
 WsEvent = (
-    HwPort | HardwareReady | ParamChange | BypassChange | OrderChange | StructuralChange
+    HwPort | HardwareReady | ParamChange | BypassChange | OrderChange | PositionChange | StructuralChange
 )
 
 
@@ -106,6 +113,18 @@ class WsProtocol:
 
         if msg_type == "loading_end":
             return HardwareReady(inputs=[], outputs=[])
+
+        # plugin_pos /graph/label x y
+        if msg_type == "plugin_pos" and len(parts) >= 4:
+            graph_path = parts[1]
+            if graph_path.startswith("/graph/"):
+                label = graph_path[7:]
+                try:
+                    x = float(parts[2])
+                    y = float(parts[3])
+                    return PositionChange(label=label, x=x, y=y)
+                except ValueError:
+                    pass
 
         if msg_type in WsProtocol.STRUCTURAL_MESSAGES:
             return StructuralChange(msg_type=msg_type, raw_message=message)
@@ -255,6 +274,7 @@ class WsClient:
         self._on_bypass_change: Callable[[str, bool], None] | None = None
         self._on_structural_change: Callable[[str, str], None] | None = None
         self._on_order_change: Callable[[list[str]], None] | None = None
+        self._on_position_change: Callable[[str, float, float], None] | None = None
 
         # Hardware / Pedalboard state
         self._hw_audio_inputs: list[str] = []
@@ -279,11 +299,13 @@ class WsClient:
         on_bypass_change: Callable[[str, bool], None] | None = None,
         on_structural_change: Callable[[str, str], None] | None = None,
         on_order_change: Callable[[list[str]], None] | None = None,
+        on_position_change: Callable[[str, float, float], None] | None = None,
     ):
         self._on_param_change = on_param_change
         self._on_bypass_change = on_bypass_change
         self._on_structural_change = on_structural_change
         self._on_order_change = on_order_change
+        self._on_position_change = on_position_change
 
     # -------------------
     # WsConnection callbacks
@@ -329,6 +351,10 @@ class WsClient:
             case OrderChange(order=order):
                 if self._on_order_change:
                     self._on_order_change(order)
+
+            case PositionChange(label=label, x=x, y=y):
+                if self._on_position_change:
+                    self._on_position_change(label, x, y)
 
             case StructuralChange(msg_type=mt, raw_message=msg):
                 if self._on_structural_change:

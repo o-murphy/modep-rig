@@ -146,14 +146,13 @@ class Rig:
         self.input_slot = HardwareSlot(self, ports=hw_inputs, is_input=True)
         self.output_slot = HardwareSlot(self, ports=hw_outputs, is_input=False)
 
-        # Slots list - порядок контролюється клієнтом
+        # Slots list - порядок визначається по координатах (x, y)
         self.slots: list[Slot] = []
-
-        # Pending inserts mapping: label -> desired insert index (used for replace)
-        self._pending_inserts: dict[str, int] = {}
 
         # Flag to defer reconnections during initial pedalboard loading
         self._initializing = True
+        # Flag to prevent recursive position updates during normalization
+        self._normalizing = False
 
         # External callbacks (for UI)
         self._ext_on_param_change: OnParamChangeCallback | None = None
@@ -168,6 +167,7 @@ class Rig:
             on_bypass_change=self._on_bypass_change,
             on_structural_change=self._on_structural_change,
             on_order_change=self._on_order_change,
+            on_position_change=self._on_position_change,
         )
 
         # If the client was created with connect=False we need to start it now so the
@@ -193,26 +193,21 @@ class Rig:
 
         # Initialization complete - reconnections will now happen normally
         self._initializing = False
-        # NOTE: We do NOT call reconnect() here anymore.
-        # The server already has correct connections - we just observe.
-        # Only move_slot() and explicit user actions should trigger reconnect.
+
         if self.slots:
-            print(f"Loaded {len(self.slots)} slots from server (no reconnect)")
+            print(f"Loaded {len(self.slots)} slots from server")
+            # Sort slots by position and normalize to clean grid
+            self.slots = self._sort_slots_by_position(self.slots)
+            self.reconnect_seamless()
+            self._normalize_positions()
         else:
             print("No slots loaded from server")
 
-        # By default we perform an initial reset and rebuild (preserves previous behaviour).
-        # If `reset_on_init` is False, we skip calling `client.reset()` and `reconnect()` so
-        # the local `Rig` state will be built reactively from WebSocket `add`/`remove`
-        # messages emitted by the server (useful to avoid double connect/disconnects
-        # when the server already pushes the current pedalboard on startup).
         if reset_on_init:
-            # FIXME: maybe not needed due to auto init on websocket messages
-            # Initial reset
             self.client.reset()
             self.reconnect()
-        else:
-            print("Rig initialization complete")
+
+        print("Rig initialization complete")
 
     def _resolve_hardware_ports(self) -> tuple[list[str], list[str]]:
         """Resolve hardware ports from config or auto-detect from MOD-UI."""
@@ -319,6 +314,135 @@ class Rig:
         # Notify external callback
         if self._ext_on_order_change:
             self._ext_on_order_change(order)
+
+    def _on_position_change(self, label: str, x: float, y: float):
+        """Handle position change from WebSocket.
+
+        Updates slot position and reorders slots based on new coordinates.
+        """
+        # Skip position updates during normalization (we're sending, not receiving)
+        if self._normalizing:
+            return
+
+        slot = self._find_slot_by_label(label)
+        if not slot:
+            print(f"  Position change for unknown slot {label}, ignoring")
+            return
+
+        old_x = getattr(slot.plugin, "ui_x", None)
+        old_y = getattr(slot.plugin, "ui_y", None)
+
+        slot.plugin.ui_x = x
+        slot.plugin.ui_y = y
+
+        print(f"Rig << POSITION: {label} ({old_x}, {old_y}) -> ({x}, {y})")
+
+        # Skip reordering during initialization
+        if self._initializing:
+            return
+
+        # Reorder slots based on new positions and reconnect if order changed
+        self._reorder_by_position()
+
+    def _reorder_by_position(self):
+        """Reorder slots based on their UI positions using Y-clustering."""
+        if not self.slots:
+            return
+
+        old_order = [s.label for s in self.slots]
+        self.slots = self._sort_slots_by_position(self.slots)
+        new_order = [s.label for s in self.slots]
+
+        if old_order != new_order:
+            print(f"  Order changed: {old_order} -> {new_order}")
+            self.reconnect_seamless()
+            if self._ext_on_order_change:
+                self._ext_on_order_change(new_order)
+        else:
+            print("  Order unchanged after position update")
+
+        # Always normalize positions after any position change
+        self._normalize_positions()
+
+    def _normalize_positions(
+        self,
+        x_step: int = 600,
+        y_step: int = 600,
+        base_x: int = 200,
+        base_y: int = 400,
+        max_per_row: int = 4,
+    ):
+        """Normalize slot positions to a grid with rows first, then columns.
+
+        Places slots in rows of max_per_row plugins each, filling rows
+        left-to-right before moving to the next row.
+
+        Args:
+            x_step: Horizontal spacing between plugins
+            y_step: Vertical spacing between rows
+            base_x: X coordinate for first plugin in each row
+            base_y: Y coordinate for first row
+            max_per_row: Maximum plugins per row (default 5)
+        """
+        if not self.slots:
+            return
+
+        print("  Normalizing positions to grid...")
+
+        self._normalizing = True
+        try:
+            for idx, slot in enumerate(self.slots):
+                row = idx // max_per_row
+                col = idx % max_per_row
+
+                new_x = base_x + col * x_step
+                new_y = base_y + row * y_step
+
+                old_x = getattr(slot.plugin, "ui_x", 0)
+                old_y = getattr(slot.plugin, "ui_y", 0)
+
+                # Only update if position actually changed significantly
+                if abs(new_x - old_x) > 10 or abs(new_y - old_y) > 10:
+                    slot.plugin.ui_x = new_x
+                    slot.plugin.ui_y = new_y
+                    self.client.effect_position(slot.label, new_x, new_y)
+                    print(f"    {slot.label}: ({old_x}, {old_y}) -> ({new_x}, {new_y})")
+        finally:
+            self._normalizing = False
+
+    def _sort_slots_by_position(self, slots: list["Slot"], y_threshold: float = 150.0) -> list["Slot"]:
+        """Sort slots by position using Y-clustering.
+
+        Slots are grouped into rows based on Y-coordinate proximity,
+        then sorted left-to-right within each row.
+
+        Args:
+            slots: List of slots to sort
+            y_threshold: Max Y difference to be considered same row
+
+        Returns:
+            Sorted list of slots
+        """
+        if not slots:
+            return []
+
+        # Sort by Y first to find clusters
+        sorted_by_y = sorted(slots, key=lambda s: getattr(s.plugin, "ui_y", 0) or 0)
+
+        # Assign row numbers based on Y-clustering
+        rows: dict["Slot", int] = {}
+        current_row = 0
+        prev_y: float | None = None
+
+        for slot in sorted_by_y:
+            y = getattr(slot.plugin, "ui_y", 0) or 0
+            if prev_y is not None and (y - prev_y) > y_threshold:
+                current_row += 1
+            rows[slot] = current_row
+            prev_y = y
+
+        # Sort by (row, x)
+        return sorted(slots, key=lambda s: (rows[s], getattr(s.plugin, "ui_x", 0) or 0))
 
     def _on_structural_change(self, msg_type: str, raw_message: str):
         """
@@ -489,51 +613,26 @@ class Rig:
         slot = Slot(self, plugin)
         plugin.slot = slot
 
-        # Determine insert index: use pending_inserts (client-requested), else append to preserve server order
-        desired_idx = None
-        if label in self._pending_inserts:
-            # Client explicitly requested a position (via request_add_plugin_at or replace)
-            desired_idx = self._pending_inserts.pop(label)
-            print(f"  Using pending insert index: {desired_idx}")
-        else:
-            # No client request - append to end to preserve server's ordering
-            # (server sends plugins in the order they should appear)
-            print("  Appending to preserve server order")
-            desired_idx = len(self.slots)
+        # Store UI position on plugin
+        slot.plugin.ui_x = x if x is not None else 0
+        slot.plugin.ui_y = y if y is not None else 0
 
-        # Clamp index to valid range
-        if desired_idx < 0:
-            desired_idx = 0
-        if desired_idx > len(self.slots):
-            desired_idx = len(self.slots)
+        # Add slot and sort by position
+        self.slots.append(slot)
+        self.slots = self._sort_slots_by_position(self.slots)
+        print(f"  Created slot: {slot} at index {slot.index} (pos: {x}, {y})")
 
-        self.slots.insert(desired_idx, slot)
-        print(f"  Created slot: {slot} at index {desired_idx}")
-
-        # Store UI position on plugin for future ordering
-        if x is not None:
-            slot.plugin.ui_x = x
-        if y is not None:
-            slot.plugin.ui_y = y
-
-        # Connect into chain UNLESS we're still initializing (in which case we'll do one final reconnect)
+        # Connect into chain UNLESS we're still initializing
         if self._initializing:
-            print(
-                "  Skipping reconnect during initialization (will do final reconnect after loading)"
-            )
+            print("  Skipping reconnect during initialization")
         else:
-            self._reconnect_slot(slot)
-
-        # If there was a pending insert index for this label (replace behavior) we already handled it above
+            self.reconnect_seamless()
+            # Normalize positions to fit the new plugin into the grid
+            self._normalize_positions()
 
         # Сповіщуємо UI
         if self._ext_on_slot_added:
             self._ext_on_slot_added(slot)
-        # Ensure plugins are positioned on UI according to order
-        try:
-            self._layout_plugins()
-        except Exception:
-            pass
 
     def _on_plugin_removed(self, label: str):
         """
@@ -567,14 +666,13 @@ class Rig:
         self.slots.remove(slot)
         print(f"  Removed slot: {label}")
 
+        # Normalize remaining positions to fill the gap
+        if not self._initializing and self.slots:
+            self._normalize_positions()
+
         # Сповіщуємо UI
         if self._ext_on_slot_removed:
             self._ext_on_slot_removed(label)
-        # Re-layout remaining plugins
-        try:
-            self._layout_plugins()
-        except Exception:
-            pass
 
     def _on_pedalboard_reset(self):
         """Handle full pedalboard reset/load."""
@@ -624,28 +722,25 @@ class Rig:
         return label
 
     def request_add_plugin_at(
-        self, uri: str, insert_index: int, x: int = 500, y: int = 400
+        self, uri: str, insert_index: int
     ) -> str | None:
         """
-        Request to add plugin and remember desired insert index so that when WS feedback
-        arrives we can move the newly created slot into the requested position.
+        Request to add plugin at a specific chain position.
+
+        Calculates the appropriate X,Y coordinates based on the target index,
+        so the plugin will be sorted into the correct position.
+
+        Args:
+            uri: Plugin URI
+            insert_index: Target position in the chain
+
+        Returns:
+            label if REST OK, None if error
         """
-        label = self._generate_label(uri)
-        # Record desired index until WS reports the new plugin
-        self._pending_inserts[label] = insert_index
+        # Calculate position for this index
+        x, y = self._calculate_position_for_index(insert_index)
 
-        result = self.client.effect_add(label, uri, x, y)
-
-        if not result or not isinstance(result, dict) or not result.get("valid"):
-            # cleanup pending
-            self._pending_inserts.pop(label, None)
-            print(f"REST error: Failed to add plugin {uri}")
-            return None
-
-        print(
-            f"REST OK: Requested add {label} at index {insert_index}, waiting for WS feedback"
-        )
-        return label
+        return self.request_add_plugin(uri, x=int(x), y=int(y))
 
     def request_remove_plugin(self, label: str) -> bool:
         """
@@ -672,7 +767,7 @@ class Rig:
         """
         Move slot to different position in chain.
 
-        This is client-controlled (server doesn't care about order).
+        Reorders locally, reconnects, and normalizes positions on server.
 
         Args:
             from_idx: Current position
@@ -685,31 +780,69 @@ class Rig:
         if from_idx == to_idx:
             return
 
+        print(f"Moving slot from idx {from_idx} to {to_idx}")
+
+        # Reorder locally
         slot = self.slots.pop(from_idx)
         self.slots.insert(to_idx, slot)
 
-        # Rebuild routing (seamless to avoid audio gap)
+        # Reconnect with new order
         self.reconnect_seamless()
 
-        # Broadcast new order to other clients
-        self.broadcast_order()
+        # Normalize positions (updates server)
+        self._normalize_positions()
 
-    def broadcast_order(self) -> bool:
-        """Broadcast current slot order to all connected clients.
+        # Notify UI
+        if self._ext_on_order_change:
+            self._ext_on_order_change([s.label for s in self.slots])
 
-        Uses the first slot's label as carrier (required for the param_set hack).
+    def _calculate_position_for_index(
+        self, target_idx: int, exclude_slot: "Slot | None" = None, x_step: float = 500.0
+    ) -> tuple[float, float]:
+        """Calculate X,Y position for inserting a slot at target index.
+
+        Args:
+            target_idx: Target position in the chain
+            exclude_slot: Slot to exclude from calculations (the one being moved)
+            x_step: Horizontal spacing between plugins
 
         Returns:
-            True if broadcast was sent successfully
+            (x, y) coordinates
         """
-        if not self.slots:
-            print("No slots to broadcast order")
-            return False
+        # Get slots excluding the one being moved
+        other_slots = [s for s in self.slots if s != exclude_slot]
 
-        order = [slot.label for slot in self.slots]
-        carrier_label = self.slots[0].label
+        if not other_slots:
+            return (200.0, 400.0)
 
-        return self.client.ws.broadcast_order(order, carrier_label)
+        # Sort other slots by current position
+        sorted_slots = self._sort_slots_by_position(other_slots)
+
+        if target_idx <= 0:
+            # Insert before first slot
+            first = sorted_slots[0]
+            first_x = getattr(first.plugin, "ui_x", 200) or 200
+            first_y = getattr(first.plugin, "ui_y", 400) or 400
+            return (first_x - x_step, first_y)
+
+        if target_idx >= len(sorted_slots):
+            # Insert after last slot
+            last = sorted_slots[-1]
+            last_x = getattr(last.plugin, "ui_x", 200) or 200
+            last_y = getattr(last.plugin, "ui_y", 400) or 400
+            return (last_x + x_step, last_y)
+
+        # Insert between two slots
+        prev_slot = sorted_slots[target_idx - 1]
+        next_slot = sorted_slots[target_idx]
+
+        prev_x = getattr(prev_slot.plugin, "ui_x", 0) or 0
+        prev_y = getattr(prev_slot.plugin, "ui_y", 400) or 400
+        next_x = getattr(next_slot.plugin, "ui_x", 0) or 0
+
+        # Position between prev and next
+        new_x = (prev_x + next_x) / 2
+        return (new_x, prev_y)
 
     # =========================================================================
     # Routing
@@ -726,12 +859,6 @@ class Rig:
 
         for i in range(len(chain) - 1):
             self._connect_pair(chain[i], chain[i + 1])
-
-        # After connections are rebuilt, update UI positions of plugins to reflect order
-        try:
-            self._layout_plugins()
-        except Exception:
-            pass
 
         print("=== RECONNECT DONE ===\n")
 
@@ -784,12 +911,6 @@ class Rig:
                 self.client.effect_disconnect(out_path, in_path)
             except Exception:
                 pass
-
-        # Update UI positions
-        try:
-            self._layout_plugins()
-        except Exception:
-            pass
 
         print("=== RECONNECT SEAMLESS DONE ===\n")
 
@@ -912,22 +1033,6 @@ class Rig:
                     self.client.effect_disconnect(out, inp)
                 except Exception:
                     pass
-
-    def _layout_plugins(self, step: int = 500, base_x: int = 200, y: int = 400):
-        """
-        Position plugins on the MOD-UI horizontally according to their order.
-
-        Args:
-            step: X step between plugins
-            base_x: X coordinate for first plugin
-            y: Y coordinate for all plugins
-        """
-        for idx, slot in enumerate(self.slots):
-            x = base_x + idx * step
-            try:
-                self.client.effect_position(slot.label, x, y)
-            except Exception as e:
-                print(f"  ⚠️ Failed to position {slot.label}: {e}")
 
     # =========================================================================
     # Convenience API
