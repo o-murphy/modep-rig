@@ -8,7 +8,7 @@ dict-like access to control parameters with automatic API synchronization.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import Any, Iterator
 
 from pytest import Config
 

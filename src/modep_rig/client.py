@@ -112,7 +112,7 @@ WsEvent = (
 # Protocol
 # -----------------------------
 class WsProtocol:
-    IGNORE_MESSAGES = {"stats", "ping"}
+    IGNORE_MESSAGES = {"stats", "sys_stats", "ping"}
 
     @staticmethod
     def parse(message: str) -> WsEvent | None:
@@ -167,14 +167,14 @@ class WsProtocol:
                 label = instance[7:]
                 return PluginAdd(label, uri, x, y)
             
-        elif msg_type == "remove" and len(parts) >= 2:
+        if msg_type == "remove" and len(parts) >= 2:
             # remove /graph/label
             graph_path = parts[1]
             if graph_path.startswith("/graph/"):
                 label = graph_path[7:]
                 return PluginRemove(label)
 
-        elif msg_type == "param_set" and len(parts) >= 4:
+        if msg_type == "param_set" and len(parts) >= 4:
             graph_path = parts[1]
             symbol = parts[2]
             try:
