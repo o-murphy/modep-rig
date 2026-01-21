@@ -52,14 +52,14 @@ class HardwareReady:
 # --------------------
 # Pedalboard / Plugin events
 @dataclass
-class ParamChange:
+class ParamSet:
     label: str
     symbol: str
     value: float
 
 
 @dataclass
-class BypassChange:
+class ParamSetBypass:
     label: str
     bypassed: bool
 
@@ -70,7 +70,7 @@ class OrderChange:
 
 
 @dataclass
-class PositionChange:
+class PluginPos:
     label: str
     x: float
     y: float
@@ -82,10 +82,29 @@ class StructuralChange:
     raw_message: str
 
 
+@dataclass
+class PluginAdd:
+    label: str
+    uri: str
+    x: int
+    y: int
+
+
+@dataclass
+class PluginRemove:
+    label: str
+
+
 # --------------------
 # Union of all possible events
 WsEvent = (
-    HwPort | HardwareReady | ParamChange | BypassChange | OrderChange | PositionChange | StructuralChange
+    HwPort
+    | HardwareReady
+    | ParamSet
+    | ParamSetBypass
+    | OrderChange
+    | PluginPos
+    | StructuralChange
 )
 
 
@@ -94,7 +113,7 @@ WsEvent = (
 # -----------------------------
 class WsProtocol:
     IGNORE_MESSAGES = {"stats", "ping"}
-    STRUCTURAL_MESSAGES = {"add_effect", "remove_effect", "connect"}
+    STRUCTURAL_MESSAGES = {"connect"}
 
     @staticmethod
     def parse(message: str) -> WsEvent | None:
@@ -123,9 +142,38 @@ class WsProtocol:
                 try:
                     x = float(parts[2])
                     y = float(parts[3])
-                    return PositionChange(label=label, x=x, y=y)
+                    return PluginPos(label=label, x=x, y=y)
                 except ValueError:
                     pass
+
+        if msg_type == "add" and len(parts) >= 3:
+            # add instance uri x y bypassed pVersion offBuild
+            # parts[0] = "add"
+            # parts[1] = instance (e.g., "/graph/DS1_1")
+            # parts[2] = uri
+            # parts[3] = x, parts[4] = y (optional)
+            instance = parts[1]
+            uri = parts[2]
+            x = None
+            y = None
+            if len(parts) >= 5:
+                try:
+                    x = float(parts[3])
+                    y = float(parts[4])
+                except Exception:
+                    x = None
+                    y = None
+
+            if instance.startswith("/graph/"):
+                label = instance[7:]
+                return PluginAdd(label, uri, x, y)
+            
+        elif msg_type == "remove" and len(parts) >= 2:
+            # remove /graph/label
+            graph_path = parts[1]
+            if graph_path.startswith("/graph/"):
+                label = graph_path[7:]
+                return PluginRemove(label)
 
         if msg_type in WsProtocol.STRUCTURAL_MESSAGES:
             return StructuralChange(msg_type=msg_type, raw_message=message)
@@ -142,9 +190,9 @@ class WsProtocol:
                 if symbol.startswith("ORDER:"):
                     return OrderChange(order=symbol.split(":")[1:])
                 elif symbol == ":bypass":
-                    return BypassChange(label=label, bypassed=value > 0.5)
+                    return ParamSetBypass(label=label, bypassed=value > 0.5)
                 else:
-                    return ParamChange(label=label, symbol=symbol, value=value)
+                    return ParamSet(label=label, symbol=symbol, value=value)
 
         return StructuralChange(msg_type=msg_type, raw_message=message)
 
@@ -331,7 +379,7 @@ class WsClient:
         if not event:
             return
 
-        # dispatch    
+        # dispatch
         self._dispatch(event)
 
         match event:

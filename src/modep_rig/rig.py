@@ -4,7 +4,7 @@ import secrets
 import string
 
 from modep_rig.config import Config, PluginConfig
-from modep_rig.client import Client, PositionChange
+from modep_rig.client import Client, PluginAdd, PluginPos, PluginRemove
 from modep_rig.plugin import Plugin, Port
 
 
@@ -95,6 +95,11 @@ class HardwareSlot:
 # =============================================================================
 
 
+class Router:
+    def __init__(self, client: Client):
+        self.client = client
+
+
 class Rig:
     """
     Rig — ланцюг ефектів: Input -> [Slot 0] -> [Slot 1] -> ... -> Output
@@ -141,7 +146,9 @@ class Rig:
             on_order_change=self._on_order_change,
         )
 
-        self.client.ws.on(PositionChange, self._on_position_change)
+        self.client.ws.on(PluginAdd, self._on_plugin_added)
+        self.client.ws.on(PluginRemove, self._on_plugin_removed)
+        self.client.ws.on(PluginPos, self._on_position_change)
 
         # If the client was created with connect=False we need to start it now so the
         # callbacks will receive the server's initial messages. Otherwise connecting
@@ -268,7 +275,7 @@ class Rig:
         if self._ext_on_order_change:
             self._ext_on_order_change(order)
 
-    def _on_position_change(self, event: PositionChange):
+    def _on_position_change(self, event: PluginPos):
         """Handle position change from WebSocket.
 
         Updates slot position and reorders slots based on new coordinates.
@@ -282,15 +289,9 @@ class Rig:
             print(f"  Position change for unknown slot {event.label}, ignoring")
             return
 
-        old_x = slot.plugin.ui_x
-        old_y = slot.plugin.ui_y
-
+        # NOTE: we should ensure that plugin already got an update
         slot.plugin.ui_x = event.x
         slot.plugin.ui_y = event.y
-
-        print(
-            f"Rig << POSITION: {event.label} ({old_x}, {old_y}) -> ({event.x}, {event.y})"
-        )
 
         # Skip reordering during initialization
         if self._initializing:
@@ -406,44 +407,12 @@ class Rig:
         Handle structural change from WebSocket.
 
         Messages:
-        - add instance uri x y bypassed pVersion offBuild
-        - remove /graph/label
         - connect/disconnect - ignored (we manage routing)
         - load/reset - full rebuild
         """
         print(f"WS structural: {msg_type} - {raw_message}")
-        parts = raw_message.split()
 
-        if msg_type == "add" and len(parts) >= 3:
-            # add instance uri x y bypassed pVersion offBuild
-            # parts[0] = "add"
-            # parts[1] = instance (e.g., "/graph/DS1_1")
-            # parts[2] = uri
-            # parts[3] = x, parts[4] = y (optional)
-            instance = parts[1]
-            uri = parts[2]
-            x = None
-            y = None
-            if len(parts) >= 5:
-                try:
-                    x = float(parts[3])
-                    y = float(parts[4])
-                except Exception:
-                    x = None
-                    y = None
-
-            if instance.startswith("/graph/"):
-                label = instance[7:]
-                self._on_plugin_added(label, uri, x, y)
-
-        elif msg_type == "remove" and len(parts) >= 2:
-            # remove /graph/label
-            graph_path = parts[1]
-            if graph_path.startswith("/graph/"):
-                label = graph_path[7:]
-                self._on_plugin_removed(label)
-
-        elif msg_type in ("load", "reset"):
+        if msg_type in ("load", "reset"):
             # Full pedalboard change - rebuild everything
             self._on_pedalboard_reset()
 
@@ -498,27 +467,25 @@ class Rig:
 
         return inputs, outputs
 
-    def _on_plugin_added(
-        self, label: str, uri: str, x: float | None = None, y: float | None = None
-    ):
+    def _on_plugin_added(self, event: PluginAdd):
         """
         Handle plugin added via WebSocket feedback.
 
         Creates Slot, fetches port info, connects to chain.
         """
         # Перевіряємо чи такий слот вже існує
-        existing = self._find_slot_by_label(label)
+        existing = self._find_slot_by_label(event.label)
         if existing:
             # Якщо слот вже існує — оновлюємо його метадані
-            print(f"  Slot {label} already exists, updating metadata")
+            print(f"  Slot {event.label} already exists, updating metadata")
             plugin = existing.plugin
             plugin.update_metadata()
 
             # Update UI position if provided
-            if x is not None:
-                plugin.ui_x = x
-            if y is not None:
-                plugin.ui_y = y
+            if event.x is not None:
+                plugin.ui_x = event.x
+            if event.y is not None:
+                plugin.ui_y = event.y
 
             # Notify UI about potential metadata changes
             if self._ext_on_slot_added:
@@ -527,8 +494,8 @@ class Rig:
 
         plugin = Plugin.load_supported(
             self.client,
-            uri=uri,
-            label=label,
+            uri=event.uri,
+            label=event.label,
             config=self.config,
         )
 
@@ -539,14 +506,14 @@ class Rig:
         slot = Slot(plugin)
 
         # Store UI position on plugin
-        slot.plugin.ui_x = x if x is not None else 0
-        slot.plugin.ui_y = y if y is not None else 0
+        slot.plugin.ui_x = event.x if event.x is not None else 0
+        slot.plugin.ui_y = event.y if event.y is not None else 0
 
         # Add slot and sort by position
         self.slots.append(slot)
         self.slots = self._sort_slots_by_position(self.slots)
         print(
-            f"  Created slot: {slot} at index {self.slots.index(slot)} (pos: {x}, {y})"
+            f"  Created slot: {slot} at index {self.slots.index(slot)} (pos: {event.x}, {event.y})"
         )
 
         # Connect into chain UNLESS we're still initializing
@@ -561,15 +528,15 @@ class Rig:
         if self._ext_on_slot_added:
             self._ext_on_slot_added(slot)
 
-    def _on_plugin_removed(self, label: str):
+    def _on_plugin_removed(self, event: PluginRemove):
         """
         Handle plugin removed via WebSocket feedback.
 
         Reconnects neighbors and removes Slot.
         """
-        slot = self._find_slot_by_label(label)
+        slot = self._find_slot_by_label(event.label)
         if not slot:
-            print(f"  Slot {label} not found, skipping")
+            print(f"  Slot {event.label} not found, skipping")
             return
 
         slot_idx = self.slots.index(slot)
@@ -591,7 +558,7 @@ class Rig:
 
         # Видаляємо слот
         self.slots.remove(slot)
-        print(f"  Removed slot: {label}")
+        print(f"  Removed slot: {event.label}")
 
         # Normalize remaining positions to fill the gap
         if not self._initializing and self.slots:
@@ -599,7 +566,7 @@ class Rig:
 
         # Сповіщуємо UI
         if self._ext_on_slot_removed:
-            self._ext_on_slot_removed(label)
+            self._ext_on_slot_removed(event.label)
 
     def _on_pedalboard_reset(self):
         """Handle full pedalboard reset/load."""

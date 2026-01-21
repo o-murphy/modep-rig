@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Iterator
 
 from pytest import Config
 
-from modep_rig.client import BypassChange, Client, ParamChange
+from modep_rig.client import ParamSetBypass, Client, ParamSet, PluginPos
 from modep_rig.controls import ControlPort, parse_control_ports
 
 
@@ -146,21 +146,34 @@ class Plugin:
         self._unsubscribe()
 
     def _subscribe(self):
-        self.client.ws.on(BypassChange, self._on_bypass_change)
-        self.client.ws.on(ParamChange, self._on_param_change)
+        self.client.ws.on(ParamSetBypass, self._on_bypass_change)
+        self.client.ws.on(ParamSet, self._on_param_change)
+        self.client.ws.on(PluginPos, self._on_position_change)
 
     def _unsubscribe(self):
-        self.client.ws.on(BypassChange, self._on_bypass_change)
-        self.client.ws.off(ParamChange, self._on_param_change)
+        self.client.ws.on(ParamSetBypass, self._on_bypass_change)
+        self.client.ws.off(ParamSet, self._on_param_change)
 
-    def _on_bypass_change(self, event: BypassChange):
+    def _on_bypass_change(self, event: ParamSetBypass):
         print("EV", event)
         if self.label == event.label:
             self._bypassed = event.bypassed
 
-    def _on_param_change(self, event: ParamChange):
+    def _on_param_change(self, event: ParamSet):
         if self.label == event.label and event.symbol in self.controls:
             self.set_control_value(event.symbol, event.value)
+
+    def _on_position_change(self, event: PluginPos):
+        if self.label == event.label:
+            old_x = self.ui_x
+            old_y = self.ui_y
+
+            self.ui_x = event.x
+            self.ui_y = event.y
+
+            print(
+                f"PLUGIN << POSITION: {event.label} ({old_x}, {old_y}) -> ({event.x}, {event.y})"
+            )
 
     @classmethod
     def load_supported(

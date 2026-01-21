@@ -8,7 +8,7 @@ import signal
 import sys
 from pathlib import Path
 
-from modep_rig.client import BypassChange, ParamChange
+from modep_rig.client import ParamSetBypass, ParamSet
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
@@ -561,8 +561,8 @@ class MainWindow(QMainWindow):
         self.rig_signals.slot_removed.connect(self._on_ws_slot_removed)
         self.rig_signals.order_changed.connect(self._on_ws_order_changed)
 
-        self.rig.client.ws.on(BypassChange, self._on_ws_bypass_changed)
-        self.rig.client.ws.on(ParamChange, self._on_ws_param_changed)
+        self.rig.client.ws.on(ParamSetBypass, self._on_ws_bypass_changed)
+        self.rig.client.ws.on(ParamSet, self._on_ws_param_changed)
 
         # Connect rig callbacks to emit signals
         self.rig.set_callbacks(
@@ -725,7 +725,7 @@ class MainWindow(QMainWindow):
     # WebSocket event handlers (thread-safe via Qt signals)
     # =========================================================================
 
-    def _on_ws_param_changed(self, event: ParamChange):
+    def _on_ws_param_changed(self, event: ParamSet):
         """Handle parameter change from WebSocket - update UI."""
         # If this is the selected slot, update control widget
         if (
@@ -735,7 +735,7 @@ class MainWindow(QMainWindow):
             widget = self.controls_panel.control_widgets[event.symbol]
             widget.set_value_silent(event.value)
 
-    def _on_ws_bypass_changed(self, event: BypassChange):
+    def _on_ws_bypass_changed(self, event: ParamSetBypass):
         """Handle bypass change from WebSocket - update UI."""
         if event.label == self.selected_label:
             self.controls_panel.set_bypass_silent(event.bypassed)
