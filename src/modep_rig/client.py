@@ -93,7 +93,14 @@ class PluginRemove:
 # --------------------
 # Union of all possible events
 WsEvent = (
-    HwPort | HardwareReady | ParamSet | ParamSetBypass | PluginPos | GenericMessage
+    HwPort
+    | HardwareReady
+    | ParamSet
+    | ParamSetBypass
+    | PluginPos
+    | GenericMessage
+    | PluginAdd,
+    PluginRemove,
 )
 
 
@@ -148,7 +155,7 @@ class WsProtocol:
                 try:
                     x = float(parts[3])
                     y = float(parts[4])
-                except Exception:
+                except ValueError:
                     x = None
                     y = None
 
