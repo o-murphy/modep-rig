@@ -133,8 +133,6 @@ class Rig:
         self._normalizing = False
 
         # External callbacks (for UI)
-        self._ext_on_param_change: OnParamChangeCallback | None = None
-        self._ext_on_bypass_change: OnBypassChangeCallback | None = None
         self._ext_on_slot_added: OnSlotAddedCallback | None = None
         self._ext_on_slot_removed: OnSlotRemovedCallback | None = None
         self._ext_on_order_change: OnOrderChangeCallback | None = None
@@ -144,12 +142,6 @@ class Rig:
             on_structural_change=self._on_structural_change,
             on_order_change=self._on_order_change,
             on_position_change=self._on_position_change,
-        )
-        self.client.ws.on(
-            ParamChange, self._on_param_change
-        )
-        self.client.ws.on(
-            BypassChange, self._on_bypass_change
         )
 
         # If the client was created with connect=False we need to start it now so the
@@ -191,10 +183,6 @@ class Rig:
 
         print("Rig initialization complete")
 
-    def __del__(self):
-        self.client.ws.off(BypassChange, self._on_bypass_change)
-        self.client.ws.off(ParamChange, self._on_param_change)
-
     def _resolve_hardware_ports(self) -> tuple[list[str], list[str]]:
         """Resolve hardware ports from config or auto-detect from MOD-UI."""
         hw_config = self.config.hardware
@@ -220,15 +208,11 @@ class Rig:
 
     def set_callbacks(
         self,
-        on_param_change: OnParamChangeCallback | None = None,
-        on_bypass_change: OnBypassChangeCallback | None = None,
         on_slot_added: OnSlotAddedCallback | None = None,
         on_slot_removed: OnSlotRemovedCallback | None = None,
         on_order_change: OnOrderChangeCallback | None = None,
     ):
         """Set external callbacks for UI updates."""
-        self._ext_on_param_change = on_param_change
-        self._ext_on_bypass_change = on_bypass_change
         self._ext_on_slot_added = on_slot_added
         self._ext_on_slot_removed = on_slot_removed
         self._ext_on_order_change = on_order_change
@@ -248,20 +232,6 @@ class Rig:
         """Find plugin by its label."""
         slot = self._find_slot_by_label(label)
         return slot.plugin if slot else None
-
-    def _on_param_change(self, event: ParamChange):
-        """Handle parameter change from WebSocket."""
-        plugin = self._find_plugin_by_label(event.label)
-        if plugin and event.symbol in plugin.controls:
-            if self._ext_on_param_change:
-                self._ext_on_param_change(event.label, event.symbol, event.value)
-
-    def _on_bypass_change(self, event: BypassChange):
-        """Handle bypass change from WebSocket."""
-        plugin = self._find_plugin_by_label(event.label)
-        if plugin:
-            if self._ext_on_bypass_change:
-                self._ext_on_bypass_change(event.label, event.bypassed)
 
     def _on_order_change(self, order: list[str]):
         """Handle order change broadcast from another client.

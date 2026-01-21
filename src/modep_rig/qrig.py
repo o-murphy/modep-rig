@@ -8,6 +8,8 @@ import signal
 import sys
 from pathlib import Path
 
+from modep_rig.client import BypassChange, ParamChange
+
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
@@ -41,8 +43,6 @@ from modep_rig.rig import Slot
 class RigSignals(QObject):
     """Qt signals for Rig WebSocket events."""
 
-    param_changed = Signal(str, str, float)  # label, symbol, value
-    bypass_changed = Signal(str, bool)  # label, bypassed
     slot_added = Signal(object)  # slot
     slot_removed = Signal(str)  # label
     order_changed = Signal(list)  # order (list of labels)
@@ -557,20 +557,15 @@ class MainWindow(QMainWindow):
 
         # Setup signals for thread-safe UI updates
         self.rig_signals = RigSignals()
-        self.rig_signals.param_changed.connect(self._on_ws_param_changed)
-        self.rig_signals.bypass_changed.connect(self._on_ws_bypass_changed)
         self.rig_signals.slot_added.connect(self._on_ws_slot_added)
         self.rig_signals.slot_removed.connect(self._on_ws_slot_removed)
         self.rig_signals.order_changed.connect(self._on_ws_order_changed)
 
+        self.rig.client.ws.on(BypassChange, self._on_ws_bypass_changed)
+        self.rig.client.ws.on(ParamChange, self._on_ws_param_changed)
+
         # Connect rig callbacks to emit signals
         self.rig.set_callbacks(
-            on_param_change=lambda label, sym, val: self.rig_signals.param_changed.emit(
-                label, sym, val
-            ),
-            on_bypass_change=lambda label, bp: self.rig_signals.bypass_changed.emit(
-                label, bp
-            ),
             on_slot_added=lambda slot: self.rig_signals.slot_added.emit(slot),
             on_slot_removed=lambda label: self.rig_signals.slot_removed.emit(label),
             on_order_change=lambda order: self.rig_signals.order_changed.emit(order),
@@ -730,20 +725,20 @@ class MainWindow(QMainWindow):
     # WebSocket event handlers (thread-safe via Qt signals)
     # =========================================================================
 
-    def _on_ws_param_changed(self, label: str, symbol: str, value: float):
+    def _on_ws_param_changed(self, event: ParamChange):
         """Handle parameter change from WebSocket - update UI."""
         # If this is the selected slot, update control widget
         if (
-            label == self.selected_label
-            and symbol in self.controls_panel.control_widgets
+            event.label == self.selected_label
+            and event.symbol in self.controls_panel.control_widgets
         ):
-            widget = self.controls_panel.control_widgets[symbol]
-            widget.set_value_silent(value)
+            widget = self.controls_panel.control_widgets[event.symbol]
+            widget.set_value_silent(event.value)
 
-    def _on_ws_bypass_changed(self, label: str, bypassed: bool):
+    def _on_ws_bypass_changed(self, event: BypassChange):
         """Handle bypass change from WebSocket - update UI."""
-        if label == self.selected_label:
-            self.controls_panel.set_bypass_silent(bypassed)
+        if event.label == self.selected_label:
+            self.controls_panel.set_bypass_silent(event.bypassed)
 
     def _on_ws_slot_added(self, slot: Slot):
         """Handle slot added from WebSocket - rebuild UI."""
