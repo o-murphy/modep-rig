@@ -140,11 +140,7 @@ class Rig:
         self._ext_on_slot_removed: OnSlotRemovedCallback | None = None
         self._ext_on_order_change: OnOrderChangeCallback | None = None
 
-        # # Setup WebSocket callbacks BEFORE connecting so we don't miss initial messages
-        self.client.ws.set_callbacks(
-            on_order_change=self._on_order_change,
-        )
-
+        # Setup WebSocket callbacks BEFORE connecting so we don't miss initial messages
         self.client.ws.on(PluginAdd, self._on_plugin_added)
         self.client.ws.on(PluginRemove, self._on_plugin_removed)
         self.client.ws.on(PluginPos, self._on_position_change)
@@ -237,42 +233,6 @@ class Rig:
         """Find plugin by its label."""
         slot = self._find_slot_by_label(label)
         return slot.plugin if slot else None
-
-    def _on_order_change(self, order: list[str]):
-        """Handle order change broadcast from another client.
-
-        Reorders local slots to match the received order.
-        Only reorders slots that exist locally.
-        """
-        print(f"Rig << ORDER: {order}")
-
-        # Build a mapping of label -> slot for quick lookup
-        slot_map = {slot.label: slot for slot in self.slots}
-
-        # Reorder slots based on received order
-        new_slots = []
-        for label in order:
-            if label in slot_map:
-                new_slots.append(slot_map[label])
-                del slot_map[label]
-
-        # Append any remaining slots that weren't in the order
-        new_slots.extend(slot_map.values())
-
-        # Check if order actually changed
-        if [s.label for s in self.slots] == [s.label for s in new_slots]:
-            print("  Order unchanged, skipping")
-            return
-
-        self.slots = new_slots
-        print(f"  Reordered slots: {[s.label for s in self.slots]}")
-
-        # Rebuild routing (seamless to avoid audio gap)
-        self.reconnect_seamless()
-
-        # Notify external callback
-        if self._ext_on_order_change:
-            self._ext_on_order_change(order)
 
     def _on_position_change(self, event: PluginPos):
         """Handle position change from WebSocket.
@@ -461,20 +421,13 @@ class Rig:
         # Перевіряємо чи такий слот вже існує
         existing = self._find_slot_by_label(event.label)
         if existing:
-            # Якщо слот вже існує — оновлюємо його метадані
-            print(f"  Slot {event.label} already exists, updating metadata")
-            plugin = existing.plugin
-            plugin.update_metadata()
-
-            # Update UI position if provided
+            print(f"Duplicate PluginAdd for {event.label}, ignoring")
+            
+            # Duplicate WS event, ignore
             if event.x is not None:
-                plugin.ui_x = event.x
+                existing.plugin.ui_x = event.x
             if event.y is not None:
-                plugin.ui_y = event.y
-
-            # Notify UI about potential metadata changes
-            if self._ext_on_slot_added:
-                self._ext_on_slot_added(existing)
+                existing.plugin.ui_y = event.y
             return
 
         plugin = Plugin.load_supported(
@@ -485,6 +438,7 @@ class Rig:
         )
 
         if not plugin:
+            print(f"Can not load plugin: {event.label}, {event.uri}")
             return
 
         # Створюємо слот

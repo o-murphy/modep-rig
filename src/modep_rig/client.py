@@ -2,7 +2,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 import time
 import threading
-from typing import Callable, TypeVar
+from typing import Callable
 from urllib.parse import unquote, urlparse
 
 import requests
@@ -65,11 +65,6 @@ class ParamSetBypass:
 
 
 @dataclass
-class OrderChange:
-    order: list[str]
-
-
-@dataclass
 class PluginPos:
     label: str
     x: float
@@ -102,7 +97,6 @@ WsEvent = (
     | HardwareReady
     | ParamSet
     | ParamSetBypass
-    | OrderChange
     | PluginPos
     | GenericMessage
 )
@@ -183,9 +177,7 @@ class WsProtocol:
                 return None
             if graph_path.startswith("/graph/"):
                 label = graph_path[7:]
-                if symbol.startswith("ORDER:"):
-                    return OrderChange(order=symbol.split(":")[1:])
-                elif symbol == ":bypass":
+                if symbol == ":bypass":
                     return ParamSetBypass(label=label, bypassed=value > 0.5)
                 else:
                     return ParamSet(label=label, symbol=symbol, value=value)
@@ -314,10 +306,6 @@ class WsClient:
         self.ws_url = f"{scheme}://{hostname}:{port}/websocket"
         print("WS:", self.ws_url)
 
-        # Callbacks
-        self._on_structural_change: Callable[[str, str], None] | None = None
-        self._on_order_change: Callable[[list[str]], None] | None = None
-
         self._listeners: dict[type, set[Callable[[WsEvent], None]]] = defaultdict(set)
         self._lock = threading.RLock()
 
@@ -350,14 +338,6 @@ class WsClient:
 
         for cb in listeners:
             cb(event)
-
-    # -------------------
-    # Callbacks registration
-    def set_callbacks(
-        self,
-        on_order_change: Callable[[list[str]], None] | None = None,
-    ):
-        self._on_order_change = on_order_change
 
     # -------------------
     # WsConnection callbacks
@@ -395,10 +375,6 @@ class WsClient:
                 )
                 print("WS << Pedalboard loading complete")
 
-            case OrderChange(order=order):
-                if self._on_order_change:
-                    self._on_order_change(order)
-
         # Log unknown messages
         print(f"WS << {message}")
 
@@ -428,14 +404,6 @@ class WsClient:
 
     def plugin_position(self, label: str, x: float, y: float) -> bool:
         command = f"plugin_pos /graph/{label} {float(x)} {float(y)}"
-        if self.conn.is_connected:
-            print(f"WS >> {command}")
-            return self.conn.send(command)
-        return False
-
-    def broadcast_order(self, order: list[str], carrier_label: str) -> bool:
-        order_str = ":".join(["ORDER"] + order)
-        command = f"param_set /graph/{carrier_label}/{order_str} 1.0"
         if self.conn.is_connected:
             print(f"WS >> {command}")
             return self.conn.send(command)
