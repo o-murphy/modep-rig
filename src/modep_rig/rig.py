@@ -4,7 +4,7 @@ import secrets
 import string
 
 from modep_rig.config import Config, PluginConfig
-from modep_rig.client import Client
+from modep_rig.client import BypassChange, Client, ParamChange
 from modep_rig.plugin import Plugin, Port
 
 
@@ -139,13 +139,17 @@ class Rig:
         self._ext_on_slot_removed: OnSlotRemovedCallback | None = None
         self._ext_on_order_change: OnOrderChangeCallback | None = None
 
-        # Setup WebSocket callbacks BEFORE connecting so we don't miss initial messages
+        # # Setup WebSocket callbacks BEFORE connecting so we don't miss initial messages
         self.client.ws.set_callbacks(
-            on_param_change=self._on_param_change,
-            on_bypass_change=self._on_bypass_change,
             on_structural_change=self._on_structural_change,
             on_order_change=self._on_order_change,
             on_position_change=self._on_position_change,
+        )
+        self.client.ws.on(
+            ParamChange, self._on_param_change
+        )
+        self.client.ws.on(
+            BypassChange, self._on_bypass_change
         )
 
         # If the client was created with connect=False we need to start it now so the
@@ -186,6 +190,10 @@ class Rig:
             self.reconnect()
 
         print("Rig initialization complete")
+
+    def __del__(self):
+        self.client.ws.off(BypassChange, self._on_bypass_change)
+        self.client.ws.off(ParamChange, self._on_param_change)
 
     def _resolve_hardware_ports(self) -> tuple[list[str], list[str]]:
         """Resolve hardware ports from config or auto-detect from MOD-UI."""
@@ -241,19 +249,19 @@ class Rig:
         slot = self._find_slot_by_label(label)
         return slot.plugin if slot else None
 
-    def _on_param_change(self, label: str, symbol: str, value: float):
+    def _on_param_change(self, event: ParamChange):
         """Handle parameter change from WebSocket."""
-        plugin = self._find_plugin_by_label(label)
-        if plugin and symbol in plugin.controls:
+        plugin = self._find_plugin_by_label(event.label)
+        if plugin and event.symbol in plugin.controls:
             if self._ext_on_param_change:
-                self._ext_on_param_change(label, symbol, value)
+                self._ext_on_param_change(event.label, event.symbol, event.value)
 
-    def _on_bypass_change(self, label: str, bypassed: bool):
+    def _on_bypass_change(self, event: BypassChange):
         """Handle bypass change from WebSocket."""
-        plugin = self._find_plugin_by_label(label)
+        plugin = self._find_plugin_by_label(event.label)
         if plugin:
             if self._ext_on_bypass_change:
-                self._ext_on_bypass_change(label, bypassed)
+                self._ext_on_bypass_change(event.label, event.bypassed)
 
     def _on_order_change(self, order: list[str]):
         """Handle order change broadcast from another client.

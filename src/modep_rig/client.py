@@ -271,8 +271,6 @@ class WsClient:
         print("WS:", self.ws_url)
 
         # Callbacks
-        self._on_param_change: Callable[[str, str, float], None] | None = None
-        self._on_bypass_change: Callable[[str, bool], None] | None = None
         self._on_structural_change: Callable[[str, str], None] | None = None
         self._on_order_change: Callable[[list[str]], None] | None = None
         self._on_position_change: Callable[[str, float, float], None] | None = None
@@ -314,14 +312,10 @@ class WsClient:
     # Callbacks registration
     def set_callbacks(
         self,
-        on_param_change: Callable[[str, str, float], None] | None = None,
-        on_bypass_change: Callable[[str, bool], None] | None = None,
         on_structural_change: Callable[[str, str], None] | None = None,
         on_order_change: Callable[[list[str]], None] | None = None,
         on_position_change: Callable[[str, float, float], None] | None = None,
     ):
-        self._on_param_change = on_param_change
-        self._on_bypass_change = on_bypass_change
         self._on_structural_change = on_structural_change
         self._on_order_change = on_order_change
         self._on_position_change = on_position_change
@@ -361,14 +355,6 @@ class WsClient:
                     f"WS << Hardware ports ready: inputs={self._hw_audio_inputs}, outputs={self._hw_audio_outputs}"
                 )
                 print("WS << Pedalboard loading complete")
-
-            case ParamChange(label=label, symbol=symbol, value=value):
-                if self._on_param_change:
-                    self._on_param_change(label, symbol, value)
-
-            case BypassChange(label=label, bypassed=b):
-                if self._on_bypass_change:
-                    self._on_bypass_change(label, b)
 
             case OrderChange(order=order):
                 if self._on_order_change:
