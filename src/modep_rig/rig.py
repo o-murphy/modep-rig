@@ -154,9 +154,9 @@ class Rig:
         try:
             # Only call connect if the underlying WsClient hasn't connected yet
             if (
-                not getattr(self.client.ws, "ws", None)
-                or not getattr(self.client.ws.ws, "sock", None)
-                or not getattr(self.client.ws.ws, "sock", "connected")
+                not self.client.ws
+                or not self.client.ws.conn
+                or not self.client.ws.conn.is_connected
             ):
                 # best-effort connect (WsClient.connect() is idempotent)
                 self.client.ws.connect()
@@ -307,8 +307,8 @@ class Rig:
             print(f"  Position change for unknown slot {label}, ignoring")
             return
 
-        old_x = getattr(slot.plugin, "ui_x", None)
-        old_y = getattr(slot.plugin, "ui_y", None)
+        old_x = slot.plugin.ui_x
+        old_y = slot.plugin.ui_y
 
         slot.plugin.ui_x = x
         slot.plugin.ui_y = y
@@ -376,8 +376,8 @@ class Rig:
                 new_x = base_x + col * x_step
                 new_y = base_y + row * y_step
 
-                old_x = getattr(slot.plugin, "ui_x", 0)
-                old_y = getattr(slot.plugin, "ui_y", 0)
+                old_x = slot.plugin.ui_x
+                old_y = slot.plugin.ui_y
 
                 # Only update if position actually changed significantly
                 if abs(new_x - old_x) > 10 or abs(new_y - old_y) > 10:
@@ -388,7 +388,9 @@ class Rig:
         finally:
             self._normalizing = False
 
-    def _sort_slots_by_position(self, slots: list["Slot"], y_threshold: float = 150.0) -> list["Slot"]:
+    def _sort_slots_by_position(
+        self, slots: list["Slot"], y_threshold: float = 150.0
+    ) -> list["Slot"]:
         """Sort slots by position using Y-clustering.
 
         Slots are grouped into rows based on Y-coordinate proximity,
@@ -405,7 +407,7 @@ class Rig:
             return []
 
         # Sort by Y first to find clusters
-        sorted_by_y = sorted(slots, key=lambda s: getattr(s.plugin, "ui_y", 0) or 0)
+        sorted_by_y = sorted(slots, key=lambda s: s.plugin.ui_y or 0)
 
         # Assign row numbers based on Y-clustering
         rows: dict["Slot", int] = {}
@@ -413,14 +415,14 @@ class Rig:
         prev_y: float | None = None
 
         for slot in sorted_by_y:
-            y = getattr(slot.plugin, "ui_y", 0) or 0
+            y = slot.plugin.ui_y or 0
             if prev_y is not None and (y - prev_y) > y_threshold:
                 current_row += 1
             rows[slot] = current_row
             prev_y = y
 
         # Sort by (row, x)
-        return sorted(slots, key=lambda s: (rows[s], getattr(s.plugin, "ui_x", 0) or 0))
+        return sorted(slots, key=lambda s: (rows[s], s.plugin.ui_x or 0))
 
     def _on_structural_change(self, msg_type: str, raw_message: str):
         """
@@ -559,33 +561,15 @@ class Rig:
                 self._ext_on_slot_added(existing)
             return
 
-        # Перевіряємо whitelist
-        plugin_config = self.config.get_plugin_by_uri(uri)
-        if not plugin_config:
-            print(f"  Plugin {uri} not in whitelist, ignoring")
-            return
-
-        # Отримуємо інформацію про порти
-        effect_data = self.client.effect_get(uri)
-        if not effect_data:
-            print(f"  Failed to get effect data for {uri}")
-            return
-
-        inputs, outputs = self._load_plugin_ports(label, uri, effect_data)
-        print(
-            f"  Parsed ports: inputs={[p.symbol for p in inputs]}, outputs={[p.symbol for p in outputs]}"
-        )
-
-        # Створюємо плагін
-        plugin = Plugin(
-            client=self.client,  # Буде встановлено після створення Slot
+        plugin = Plugin.load(
+            self.client,
             uri=uri,
             label=label,
-            name=effect_data.get("name", label),
-            inputs=inputs,
-            outputs=outputs,
+            config=self.config,
         )
-        plugin._load_controls(effect_data)
+
+        if not plugin:
+            return
 
         # Створюємо слот
         slot = Slot(plugin)
@@ -597,7 +581,9 @@ class Rig:
         # Add slot and sort by position
         self.slots.append(slot)
         self.slots = self._sort_slots_by_position(self.slots)
-        print(f"  Created slot: {slot} at index {self.slots.index(slot)} (pos: {x}, {y})")
+        print(
+            f"  Created slot: {slot} at index {self.slots.index(slot)} (pos: {x}, {y})"
+        )
 
         # Connect into chain UNLESS we're still initializing
         if self._initializing:
@@ -666,7 +652,7 @@ class Rig:
         """Generate unique label for plugin."""
         base = Slot._label_from_uri(uri)
         alphabet = string.ascii_letters + string.digits
-        uid = ''.join(secrets.choice(alphabet) for _ in range(8))
+        uid = "".join(secrets.choice(alphabet) for _ in range(8))
         return f"{base}_{uid}"
 
     def request_add_plugin(self, uri: str, x: int = 500, y: int = 400) -> str | None:
@@ -698,9 +684,7 @@ class Rig:
         print(f"REST OK: Requested add {label}, waiting for WS feedback")
         return label
 
-    def request_add_plugin_at(
-        self, uri: str, insert_index: int
-    ) -> str | None:
+    def request_add_plugin_at(self, uri: str, insert_index: int) -> str | None:
         """
         Request to add plugin at a specific chain position.
 
@@ -798,24 +782,24 @@ class Rig:
         if target_idx <= 0:
             # Insert before first slot
             first = sorted_slots[0]
-            first_x = getattr(first.plugin, "ui_x", 200) or 200
-            first_y = getattr(first.plugin, "ui_y", 400) or 400
+            first_x = first.plugin.ui_x or 200
+            first_y = first.plugin.ui_y or 400
             return (first_x - x_step, first_y)
 
         if target_idx >= len(sorted_slots):
             # Insert after last slot
             last = sorted_slots[-1]
-            last_x = getattr(last.plugin, "ui_x", 200) or 200
-            last_y = getattr(last.plugin, "ui_y", 400) or 400
+            last_x = last.plugin.ui_x or 200
+            last_y = last.plugin.ui_y or 400
             return (last_x + x_step, last_y)
 
         # Insert between two slots
         prev_slot = sorted_slots[target_idx - 1]
         next_slot = sorted_slots[target_idx]
 
-        prev_x = getattr(prev_slot.plugin, "ui_x", 0) or 0
-        prev_y = getattr(prev_slot.plugin, "ui_y", 400) or 400
-        next_x = getattr(next_slot.plugin, "ui_x", 0) or 0
+        prev_x = prev_slot.plugin.ui_x or 0
+        prev_y = prev_slot.plugin.ui_y or 400
+        next_x = next_slot.plugin.ui_x or 0
 
         # Position between prev and next
         new_x = (prev_x + next_x) / 2

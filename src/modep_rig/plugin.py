@@ -10,41 +10,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Iterator
 
+from pytest import Config
+
 from modep_rig.client import Client
 from modep_rig.controls import ControlPort, parse_control_ports
 
 
-__all__ = ["Port", "Plugin", "ChannelType"]
-
-
-class ChannelType:
-    """Channel type constants."""
-
-    LEFT = "left"
-    RIGHT = "right"
-    MONO = "mono"
-
-
-def _detect_channel(symbol: str) -> str:
-    """Визначає канал порту за його символом.
-
-    Повертає: "left", "right", або "mono"
-    """
-    symbol_lower = symbol.lower()
-
-    # Патерни для лівого каналу
-    left_patterns = ["_l", "_1", "_left", "left", "_L", "in_l", "out_l"]
-    for pattern in left_patterns:
-        if pattern.lower() in symbol_lower or symbol_lower.endswith(pattern.lower()):
-            return ChannelType.LEFT
-
-    # Патерни для правого каналу
-    right_patterns = ["_r", "_2", "_right", "right", "_R", "in_r", "out_r"]
-    for pattern in right_patterns:
-        if pattern.lower() in symbol_lower or symbol_lower.endswith(pattern.lower()):
-            return ChannelType.RIGHT
-
-    return ChannelType.MONO
+__all__ = ["Port", "Plugin"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,11 +26,6 @@ class Port:
     symbol: str
     name: str
     graph_path: str
-
-    @property
-    def channel(self) -> str:
-        """Визначає канал порту: left, right, або mono."""
-        return _detect_channel(self.symbol)
 
 
 class ControlsProxy:
@@ -169,6 +136,92 @@ class Plugin:
         self.outputs = outputs
         self.controls = ControlsProxy(self)
         self._bypassed = False
+        # ui pos
+        self.ui_x: int = 0
+        self.ui_y: int = 0
+
+    @classmethod
+    def load(cls, client: Client, uri: str, label: str, config: Config) -> Plugin | None:
+        # Перевіряємо whitelist
+        plugin_config = config.get_plugin_by_uri(uri)
+        if not plugin_config:
+            print(f"  Plugin {uri} not in whitelist, ignoring")
+            return
+        
+        effect_data = client.effect_get(uri)
+        if not effect_data:
+            print(f"  Failed to get effect data for {uri}")
+            return
+        
+        inputs, outputs = cls._load_plugin_ports(label, uri, effect_data, config)
+        print(
+            f"  Parsed ports: inputs={[p.symbol for p in inputs]}, outputs={[p.symbol for p in outputs]}"
+        )
+
+        plugin = cls(
+            client=client,  # Буде встановлено після створення Slot
+            uri=uri,
+            label=label,
+            name=effect_data.get("name", label),
+            inputs=inputs,
+            outputs=outputs,
+        )
+
+        plugin._load_controls(effect_data)
+
+        return plugin
+
+    @staticmethod
+    def _load_plugin_ports(
+        label: str, uri: str, effect_data: dict, config: Config
+    ) -> tuple[list[Port], list[Port]]:
+        """Load and filter plugin ports from effect data.
+
+        Args:
+            label: Plugin label for graph paths
+            uri: Plugin URI for config lookup
+            effect_data: Data from effect_get API
+
+        Returns:
+            Tuple of (inputs, outputs) Port lists
+        """
+        # Parse all ports from effect data
+        all_inputs = []
+        all_outputs = []
+
+        ports = effect_data.get("ports", {})
+        audio_ports = ports.get("audio", {})
+
+        for p in audio_ports.get("input", []):
+            all_inputs.append(
+                Port(
+                    symbol=p["symbol"],
+                    name=p.get("name", p["symbol"]),
+                    graph_path=f"{label}/{p['symbol']}",
+                )
+            )
+        for p in audio_ports.get("output", []):
+            all_outputs.append(
+                Port(
+                    symbol=p["symbol"],
+                    name=p.get("name", p["symbol"]),
+                    graph_path=f"{label}/{p['symbol']}",
+                )
+            )
+
+        # Apply port overrides from config
+        plugin_config = config.get_plugin_by_uri(uri)
+        if plugin_config and plugin_config.inputs is not None:
+            inputs = [p for p in all_inputs if p.symbol in plugin_config.inputs]
+        else:
+            inputs = all_inputs
+
+        if plugin_config and plugin_config.outputs is not None:
+            outputs = [p for p in all_outputs if p.symbol in plugin_config.outputs]
+        else:
+            outputs = all_outputs
+
+        return inputs, outputs
 
     def _load_controls(self, effect_data: dict[str, Any]) -> None:
         """Load control metadata from effect_get response."""
