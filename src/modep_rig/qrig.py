@@ -613,6 +613,10 @@ class MainWindow(QMainWindow):
         # Initial state
         self._rebuild_slot_widgets()
 
+    def __del__(self):
+        self.rig.client.ws.off(ParamSetBypass, self._on_ws_bypass_changed)
+        self.rig.client.ws.off(ParamSet, self._on_ws_param_changed)
+
     def _rebuild_slot_widgets(self):
         """Rebuild all slot widgets from rig state."""
         # Clear existing widgets

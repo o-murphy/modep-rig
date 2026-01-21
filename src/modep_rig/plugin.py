@@ -151,8 +151,9 @@ class Plugin:
         self.client.ws.on(PluginPos, self._on_position_change)
 
     def _unsubscribe(self):
-        self.client.ws.on(ParamSetBypass, self._on_bypass_change)
+        self.client.ws.off(ParamSetBypass, self._on_bypass_change)
         self.client.ws.off(ParamSet, self._on_param_change)
+        self.client.ws.off(PluginPos, self._on_position_change)
 
     def _on_bypass_change(self, event: ParamSetBypass):
         print("EV", event)

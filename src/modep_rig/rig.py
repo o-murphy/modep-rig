@@ -184,6 +184,11 @@ class Rig:
 
         print("Rig initialization complete")
 
+    def __del__(self):
+        self.client.ws.off(PluginAdd, self._on_plugin_added)
+        self.client.ws.off(PluginRemove, self._on_plugin_removed)
+        self.client.ws.off(PluginPos, self._on_position_change)
+
     def _resolve_hardware_ports(self) -> tuple[list[str], list[str]]:
         """Resolve hardware ports from config or auto-detect from MOD-UI."""
         hw_config = self.config.hardware
