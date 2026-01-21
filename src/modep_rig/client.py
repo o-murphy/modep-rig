@@ -318,10 +318,10 @@ class WsClient:
         # Transport
         self.conn = WsConnection(
             self.ws_url,
-            on_open=self._on_ws_open,
-            on_message=self._on_ws_message,
-            on_error=self._on_ws_error,
-            on_close=self._on_ws_close,
+            on_open=self._on_open,
+            on_message=self._on_message,
+            on_error=self._on_error,
+            on_close=self._on_close,
         )
 
     def on(self, event_type: Type[WsEventT], cb: Callable[[WsEventT], None]):
@@ -341,14 +341,14 @@ class WsClient:
 
     # -------------------
     # WsConnection callbacks
-    def _on_ws_open(self):
+    def _on_open(self):
         print(f"Підключено до WebSocket: {self.ws_url}")
         self._hw_audio_inputs.clear()
         self._hw_audio_outputs.clear()
         self._hw_ready.clear()
         self._pedalboard_ready.clear()
 
-    def _on_ws_message(self, message: str):
+    def _on_message(self, message: str):
         event = WsProtocol.parse(message)
         if not event:
             return
@@ -378,10 +378,10 @@ class WsClient:
         # Log unknown messages
         print(f"WS << {message}")
 
-    def _on_ws_error(self, error):
+    def _on_error(self, error):
         print(f"WS Помилка: {error}")
 
-    def _on_ws_close(self):
+    def _on_close(self):
         print("🔌 WebSocket з'єднання закрито")
 
     # -------------------
