@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Iterator
 
 from pytest import Config
 
-from modep_rig.client import Client
+from modep_rig.client import BypassChange, Client, ParamChange
 from modep_rig.controls import ControlPort, parse_control_ports
 
 
@@ -140,19 +140,43 @@ class Plugin:
         self.ui_x: int = 0
         self.ui_y: int = 0
 
+        self._subscribe()
+
+    def __del__(self):
+        self._unsubscribe()
+
+    def _subscribe(self):
+        self.client.ws.on(BypassChange, self._on_bypass_change)
+        self.client.ws.on(ParamChange, self._on_param_change)
+
+    def _unsubscribe(self):
+        self.client.ws.on(BypassChange, self._on_bypass_change)
+        self.client.ws.off(ParamChange, self._on_param_change)
+
+    def _on_bypass_change(self, event: BypassChange):
+        print("EV", event)
+        if self.label == event.label:
+            self._bypassed = event.bypassed
+
+    def _on_param_change(self, event: ParamChange):
+        if self.label == event.label and event.symbol in self.controls:
+            self.set_control_value(event.symbol, event.value)
+
     @classmethod
-    def load(cls, client: Client, uri: str, label: str, config: Config) -> Plugin | None:
+    def load_supported(
+        cls, client: Client, uri: str, label: str, config: Config
+    ) -> Plugin | None:
         # Перевіряємо whitelist
         plugin_config = config.get_plugin_by_uri(uri)
         if not plugin_config:
             print(f"  Plugin {uri} not in whitelist, ignoring")
             return
-        
+
         effect_data = client.effect_get(uri)
         if not effect_data:
             print(f"  Failed to get effect data for {uri}")
             return
-        
+
         inputs, outputs = cls._load_plugin_ports(label, uri, effect_data, config)
         print(
             f"  Parsed ports: inputs={[p.symbol for p in inputs]}, outputs={[p.symbol for p in outputs]}"
@@ -170,6 +194,21 @@ class Plugin:
         plugin._load_controls(effect_data)
 
         return plugin
+
+    def update_metadata(self, uri: str, label: str):
+        effect_data = self.client.effect_get(uri)
+        if not effect_data:
+            print(f"  Failed to get effect data for {uri}")
+            return
+
+        inputs, outputs = self._load_plugin_ports(label, uri, effect_data)
+
+        # Update existing plugin
+        self.uri = uri
+        self.name = effect_data.get("name", label)
+        self.inputs = inputs
+        self.outputs = outputs
+        self._load_controls(effect_data)
 
     @staticmethod
     def _load_plugin_ports(

@@ -277,7 +277,7 @@ class WsClient:
         self._on_order_change: Callable[[list[str]], None] | None = None
         self._on_position_change: Callable[[str, float, float], None] | None = None
 
-        self._listeners: dict[type, set[Callable]] = defaultdict(set)
+        self._listeners: dict[type, set[Callable[[WsEvent], None]]] = defaultdict(set)
         self._lock = threading.RLock()
 
         # Hardware / Pedalboard state
@@ -295,15 +295,15 @@ class WsClient:
             on_close=self._on_ws_close,
         )
 
-    def on(self, event_type: type, cb: Callable):
+    def on(self, event_type: type, cb: Callable[[WsEvent], None]):
         with self._lock:
             self._listeners[event_type].add(cb)
 
-    def off(self, event_type: type, cb: Callable):
+    def off(self, event_type: type, cb: Callable[[WsEvent], None]):
         with self._lock:
             self._listeners[event_type].discard(cb)
 
-    def _dispatch(self, event):
+    def _dispatch(self, event: WsEvent):
         with self._lock:
             listeners = list(self._listeners.get(type(event), ()))
 

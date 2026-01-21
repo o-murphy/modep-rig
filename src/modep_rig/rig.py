@@ -245,7 +245,6 @@ class Rig:
         """Handle parameter change from WebSocket."""
         plugin = self._find_plugin_by_label(label)
         if plugin and symbol in plugin.controls:
-            plugin.set_control_value(symbol, value)
             if self._ext_on_param_change:
                 self._ext_on_param_change(label, symbol, value)
 
@@ -253,7 +252,6 @@ class Rig:
         """Handle bypass change from WebSocket."""
         plugin = self._find_plugin_by_label(label)
         if plugin:
-            plugin._bypassed = bypassed
             if self._ext_on_bypass_change:
                 self._ext_on_bypass_change(label, bypassed)
 
@@ -534,21 +532,8 @@ class Rig:
         if existing:
             # Якщо слот вже існує — оновлюємо його метадані
             print(f"  Slot {label} already exists, updating metadata")
-
-            effect_data = self.client.effect_get(uri)
-            if not effect_data:
-                print(f"  Failed to get effect data for {uri}")
-                return
-
-            inputs, outputs = self._load_plugin_ports(label, uri, effect_data)
-
-            # Update existing plugin
             plugin = existing.plugin
-            plugin.uri = uri
-            plugin.name = effect_data.get("name", label)
-            plugin.inputs = inputs
-            plugin.outputs = outputs
-            plugin._load_controls(effect_data)
+            plugin.update_metadata()
 
             # Update UI position if provided
             if x is not None:
@@ -561,7 +546,7 @@ class Rig:
                 self._ext_on_slot_added(existing)
             return
 
-        plugin = Plugin.load(
+        plugin = Plugin.load_supported(
             self.client,
             uri=uri,
             label=label,
