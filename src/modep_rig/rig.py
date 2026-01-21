@@ -142,7 +142,6 @@ class Rig:
 
         # # Setup WebSocket callbacks BEFORE connecting so we don't miss initial messages
         self.client.ws.set_callbacks(
-            on_structural_change=self._on_structural_change,
             on_order_change=self._on_order_change,
         )
 
@@ -401,20 +400,6 @@ class Rig:
 
         # Sort by (row, x)
         return sorted(slots, key=lambda s: (rows[s], s.plugin.ui_x or 0))
-
-    def _on_structural_change(self, msg_type: str, raw_message: str):
-        """
-        Handle structural change from WebSocket.
-
-        Messages:
-        - connect/disconnect - ignored (we manage routing)
-        - load/reset - full rebuild
-        """
-        print(f"WS structural: {msg_type} - {raw_message}")
-
-        if msg_type in ("load", "reset"):
-            # Full pedalboard change - rebuild everything
-            self._on_pedalboard_reset()
 
     def _load_plugin_ports(
         self, label: str, uri: str, effect_data: dict

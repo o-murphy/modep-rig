@@ -77,7 +77,7 @@ class PluginPos:
 
 
 @dataclass
-class StructuralChange:
+class GenericMessage:
     msg_type: str
     raw_message: str
 
@@ -104,7 +104,7 @@ WsEvent = (
     | ParamSetBypass
     | OrderChange
     | PluginPos
-    | StructuralChange
+    | GenericMessage
 )
 
 
@@ -113,7 +113,6 @@ WsEvent = (
 # -----------------------------
 class WsProtocol:
     IGNORE_MESSAGES = {"stats", "ping"}
-    STRUCTURAL_MESSAGES = {"connect"}
 
     @staticmethod
     def parse(message: str) -> WsEvent | None:
@@ -175,10 +174,7 @@ class WsProtocol:
                 label = graph_path[7:]
                 return PluginRemove(label)
 
-        if msg_type in WsProtocol.STRUCTURAL_MESSAGES:
-            return StructuralChange(msg_type=msg_type, raw_message=message)
-
-        if msg_type == "param_set" and len(parts) >= 4:
+        elif msg_type == "param_set" and len(parts) >= 4:
             graph_path = parts[1]
             symbol = parts[2]
             try:
@@ -194,7 +190,7 @@ class WsProtocol:
                 else:
                     return ParamSet(label=label, symbol=symbol, value=value)
 
-        return StructuralChange(msg_type=msg_type, raw_message=message)
+        return GenericMessage(msg_type=msg_type, raw_message=message)
 
 
 class WsConnection:
@@ -359,10 +355,8 @@ class WsClient:
     # Callbacks registration
     def set_callbacks(
         self,
-        on_structural_change: Callable[[str, str], None] | None = None,
         on_order_change: Callable[[list[str]], None] | None = None,
     ):
-        self._on_structural_change = on_structural_change
         self._on_order_change = on_order_change
 
     # -------------------
@@ -404,10 +398,6 @@ class WsClient:
             case OrderChange(order=order):
                 if self._on_order_change:
                     self._on_order_change(order)
-
-            case StructuralChange(msg_type=mt, raw_message=msg):
-                if self._on_structural_change:
-                    self._on_structural_change(mt, msg)
 
         # Log unknown messages
         print(f"WS << {message}")
