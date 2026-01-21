@@ -208,21 +208,6 @@ class Plugin:
 
         return plugin
 
-    def update_metadata(self, uri: str, label: str):
-        effect_data = self.client.effect_get(uri)
-        if not effect_data:
-            print(f"  Failed to get effect data for {uri}")
-            return
-
-        inputs, outputs = self._load_plugin_ports(label, uri, effect_data)
-
-        # Update existing plugin
-        self.uri = uri
-        self.name = effect_data.get("name", label)
-        self.inputs = inputs
-        self.outputs = outputs
-        self._load_controls(effect_data)
-
     @staticmethod
     def _load_plugin_ports(
         label: str, uri: str, effect_data: dict, config: Config
