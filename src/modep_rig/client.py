@@ -2,7 +2,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 import time
 import threading
-from typing import Callable
+from typing import Callable, TypeVar
 from urllib.parse import unquote, urlparse
 
 import requests
@@ -292,11 +292,11 @@ class WsClient:
             on_close=self._on_ws_close,
         )
 
-    def on(self, event_type: type, cb: Callable[[WsEvent], None]):
+    def on(self, event_type: type[WsEvent], cb: Callable[[WsEvent], None]):
         with self._lock:
             self._listeners[event_type].add(cb)
 
-    def off(self, event_type: type, cb: Callable[[WsEvent], None]):
+    def off(self, event_type: type[WsEvent], cb: Callable[[WsEvent], None]):
         with self._lock:
             self._listeners[event_type].discard(cb)
 
