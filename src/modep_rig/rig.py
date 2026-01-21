@@ -879,7 +879,7 @@ class Rig:
         """Find slot by label."""
         return self._find_slot_by_label(label)
 
-    def list_available_plugins(self) -> list[PluginConfig]:
+    def list_supported_plugins(self) -> list[PluginConfig]:
         """List plugins from config."""
         return self.config.plugins
 
@@ -933,24 +933,6 @@ class Rig:
                 # label = self.request_add_plugin(uri)
                 # TODO: restore controls and bypass after WS feedback
                 pass
-
-    def save_preset(self, filepath: str):
-        """Save current rig state to a JSON file."""
-        import json
-
-        state = self.get_state()
-        with open(filepath, "w") as f:
-            json.dump(state, f, indent=2)
-        print(f"Preset saved to {filepath}")
-
-    def load_preset(self, filepath: str):
-        """Load rig state from a JSON file."""
-        import json
-
-        with open(filepath, "r") as f:
-            state = json.load(f)
-        self.set_state(state)
-        print(f"Preset loaded from {filepath}")
 
     def __repr__(self):
         slots_str = ", ".join(f"{i}:{s.label}" for i, s in enumerate(self.slots))

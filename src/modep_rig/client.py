@@ -2,7 +2,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 import time
 import threading
-from typing import Callable
+from typing import Callable, DefaultDict, Type, TypeVar
 from urllib.parse import unquote, urlparse
 
 import requests
@@ -93,12 +93,7 @@ class PluginRemove:
 # --------------------
 # Union of all possible events
 WsEvent = (
-    HwPort
-    | HardwareReady
-    | ParamSet
-    | ParamSetBypass
-    | PluginPos
-    | GenericMessage
+    HwPort | HardwareReady | ParamSet | ParamSetBypass | PluginPos | GenericMessage
 )
 
 
@@ -160,7 +155,7 @@ class WsProtocol:
             if instance.startswith("/graph/"):
                 label = instance[7:]
                 return PluginAdd(label, uri, x, y)
-            
+
         if msg_type == "remove" and len(parts) >= 2:
             # remove /graph/label
             graph_path = parts[1]
@@ -293,6 +288,9 @@ class WsConnection:
             self._on_close()
 
 
+WsEventT = TypeVar("WsEventT", bound=WsEvent)
+
+
 # -----------------------------
 # WsClient
 # -----------------------------
@@ -306,7 +304,9 @@ class WsClient:
         self.ws_url = f"{scheme}://{hostname}:{port}/websocket"
         print("WS:", self.ws_url)
 
-        self._listeners: dict[type, set[Callable[[WsEvent], None]]] = defaultdict(set)
+        self._listeners: DefaultDict[Type[WsEvent], set[Callable[[WsEvent], None]]] = (
+            defaultdict(set)
+        )
         self._lock = threading.RLock()
 
         # Hardware / Pedalboard state
@@ -324,11 +324,11 @@ class WsClient:
             on_close=self._on_ws_close,
         )
 
-    def on(self, event_type: type[WsEvent], cb: Callable[[WsEvent], None]):
+    def on(self, event_type: Type[WsEventT], cb: Callable[[WsEventT], None]):
         with self._lock:
             self._listeners[event_type].add(cb)
 
-    def off(self, event_type: type[WsEvent], cb: Callable[[WsEvent], None]):
+    def off(self, event_type: Type[WsEventT], cb: Callable[[WsEventT], None]):
         with self._lock:
             self._listeners[event_type].discard(cb)
 

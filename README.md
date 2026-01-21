@@ -159,10 +159,6 @@ if slot:
 # Reorder slots (client-controlled)
 rig.move_slot(from_idx=0, to_idx=2)
 
-# Save/load presets
-rig.save_preset("my_preset.json")
-rig.load_preset("my_preset.json")
-
 # Clear all plugins
 rig.clear()
 ```
@@ -212,8 +208,6 @@ rig.set_callbacks(
 - `rig.move_slot(from_idx, to_idx)` - Reorder slots in chain
 - `rig.get_slot_by_label(label)` - Find slot by label
 - `rig.clear()` - Request removal of all plugins
-- `rig.save_preset(path)` - Save rig state to JSON
-- `rig.load_preset(path)` - Load rig state from JSON
 - `rig.set_callbacks(...)` - Set UI callbacks
 
 ### Slot
