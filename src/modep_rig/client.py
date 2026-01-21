@@ -356,25 +356,6 @@ class WsClient:
         # dispatch
         self._dispatch(event)
 
-        match event:
-            case HwPort(name=name, is_output=is_output):
-                if is_output:
-                    if name not in self._hw_audio_outputs:
-                        self._hw_audio_outputs.append(name)
-                        print(f"WS << HW output: {name}")
-                else:
-                    if name not in self._hw_audio_inputs:
-                        self._hw_audio_inputs.append(name)
-                        print(f"WS << HW input: {name}")
-
-            case HardwareReady():
-                self._hw_ready.set()
-                self._pedalboard_ready.set()
-                print(
-                    f"WS << Hardware ports ready: inputs={self._hw_audio_inputs}, outputs={self._hw_audio_outputs}"
-                )
-                print("WS << Pedalboard loading complete")
-
         # Log unknown messages
         print(f"WS << {message}")
 
