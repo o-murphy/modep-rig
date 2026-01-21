@@ -1,8 +1,8 @@
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import time
 import threading
-from typing import Callable, DefaultDict, Type, TypeVar
+from typing import Callable, Type, TypeVar
 from urllib.parse import unquote, urlparse
 
 import requests
@@ -37,13 +37,13 @@ IGNORE_MESSAGES = frozenset(["stats", "sys_stats", "ping"])
 # -----------------------------
 
 
-@dataclass
+@dataclass(frozen=True)
 class HwPort:
     name: str
     is_output: bool
 
 
-@dataclass
+@dataclass(frozen=True)
 class HardwareReady:
     inputs: list[str]
     outputs: list[str]
@@ -51,41 +51,41 @@ class HardwareReady:
 
 # --------------------
 # Pedalboard / Plugin events
-@dataclass
+@dataclass(frozen=True)
 class ParamSet:
     label: str
     symbol: str
-    value: float
+    value: float = field(compare=False)
 
 
-@dataclass
+@dataclass(frozen=True)
 class ParamSetBypass:
     label: str
-    bypassed: bool
+    bypassed: bool = field(compare=False)
 
 
-@dataclass
+@dataclass(frozen=True)
 class PluginPos:
     label: str
-    x: float
-    y: float
+    x: float = field(compare=False)
+    y: float = field(compare=False)
 
 
-@dataclass
+@dataclass(frozen=True)
 class GenericMessage:
     msg_type: str
     raw_message: str
 
 
-@dataclass
+@dataclass(frozen=True)
 class PluginAdd:
     label: str
-    uri: str
-    x: int
-    y: int
+    uri: str = field(compare=False)
+    x: int = field(compare=False)
+    y: int = field(compare=False)
 
 
-@dataclass
+@dataclass(frozen=True)
 class PluginRemove:
     label: str
 
@@ -291,6 +291,37 @@ class WsConnection:
 WsEventT = TypeVar("WsEventT", bound=WsEvent)
 
 
+class StateHandler:
+    def __init__(self):
+        # ключ = тип події, значення = список подій
+        self._events: defaultdict[type, list] = defaultdict(list)
+        self._lock = threading.RLock()
+
+    def add(self, event):
+        """Додати подію"""
+        with self._lock:
+            self._events[type(event)].append(event)
+
+    def remove(self, event):
+        """Видалити конкретну подію"""
+        with self._lock:
+            events = self._events.get(type(event))
+            if events and event in events:
+                events.remove(event)
+                if not events:
+                    del self._events[type(event)]
+
+    def clear(self):
+        """Очистити всі події"""
+        with self._lock:
+            self._events.clear()
+
+    def __getitem__(self, event_type: Type):
+        """Отримати список подій певного типу"""
+        with self._lock:
+            return list(self._events.get(event_type, []))
+
+
 # -----------------------------
 # WsClient
 # -----------------------------
@@ -304,7 +335,9 @@ class WsClient:
         self.ws_url = f"{scheme}://{hostname}:{port}/websocket"
         print("WS:", self.ws_url)
 
-        self._listeners: DefaultDict[Type[WsEvent], set[Callable[[WsEvent], None]]] = (
+        self._state = StateHandler()
+
+        self._listeners: defaultdict[Type[WsEvent], set[Callable[[WsEvent], None]]] = (
             defaultdict(set)
         )
         self._lock = threading.RLock()
@@ -328,11 +361,17 @@ class WsClient:
         with self._lock:
             self._listeners[event_type].add(cb)
 
+        for event in self._state[event_type]:
+            cb(event)
+
     def off(self, event_type: Type[WsEventT], cb: Callable[[WsEventT], None]):
         with self._lock:
             self._listeners[event_type].discard(cb)
 
     def _dispatch(self, event: WsEvent):
+        # add event to local state
+        self._state.add(event)
+
         with self._lock:
             listeners = list(self._listeners.get(type(event), ()))
 
@@ -364,6 +403,7 @@ class WsClient:
 
     def _on_close(self):
         print("🔌 WebSocket з'єднання закрито")
+        self._state.clear()
 
     # -------------------
     # Public API
@@ -416,7 +456,7 @@ class WsClient:
 # Client
 # -----------------------------
 class Client:
-    def __init__(self, base_url: str, connect: bool = True):
+    def __init__(self, base_url: str):
         """
         Client for MOD server.
 
@@ -430,8 +470,7 @@ class Client:
         self.version = self._get_version()
 
         self.ws = WsClient(self.base_url)
-        if connect:
-            self.ws.connect()
+        self.ws.connect()
 
         self.effects_list = []
         self._load_effects_list()

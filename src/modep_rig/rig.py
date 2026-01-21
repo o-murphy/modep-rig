@@ -95,11 +95,6 @@ class HardwareSlot:
 # =============================================================================
 
 
-class Router:
-    def __init__(self, client: Client):
-        self.client = client
-
-
 class Rig:
     """
     Rig — ланцюг ефектів: Input -> [Slot 0] -> [Slot 1] -> ... -> Output
@@ -111,13 +106,13 @@ class Rig:
     """
 
     def __init__(
-        self, config: Config, client: Client = None, reset_on_init: bool = False
+        self, config: Config, client: Client | None = None, reset_on_init: bool = False
     ):
         self.config = config
         # If caller did not provide a Client, create one but delay WebSocket
         # connection until after callbacks are installed to avoid missing messages.
         if client is None:
-            self.client = Client(config.server.url, connect=False)
+            self.client = Client(config.server.url)
         else:
             self.client = client
 
@@ -145,21 +140,21 @@ class Rig:
         self.client.ws.on(PluginRemove, self._on_plugin_removed)
         self.client.ws.on(PluginPos, self._on_position_change)
 
-        # If the client was created with connect=False we need to start it now so the
-        # callbacks will receive the server's initial messages. Otherwise connecting
-        # has already happened during Client construction.
-        try:
-            # Only call connect if the underlying WsClient hasn't connected yet
-            if (
-                not self.client.ws
-                or not self.client.ws.conn
-                or not self.client.ws.conn.connected
-            ):
-                # best-effort connect (WsClient.connect() is idempotent)
-                self.client.ws.connect()
-        except Exception:
-            # ignore and proceed; connect may have already been started elsewhere
-            pass
+        # # If the client was created with connect=False we need to start it now so the
+        # # callbacks will receive the server's initial messages. Otherwise connecting
+        # # has already happened during Client construction.
+        # try:
+        #     # Only call connect if the underlying WsClient hasn't connected yet
+        #     if (
+        #         not self.client.ws
+        #         or not self.client.ws.conn
+        #         or not self.client.ws.conn.connected
+        #     ):
+        #         # best-effort connect (WsClient.connect() is idempotent)
+        #         self.client.ws.connect()
+        # except Exception:
+        #     # ignore and proceed; connect may have already been started elsewhere
+        #     pass
 
         # Wait for the initial pedalboard to load (loading_end message)
         # This ensures we don't return before receiving all initial plugin/connection messages
@@ -427,7 +422,7 @@ class Rig:
         existing = self._find_slot_by_label(event.label)
         if existing:
             print(f"Duplicate PluginAdd for {event.label}, ignoring")
-            
+
             # Duplicate WS event, ignore
             if event.x is not None:
                 existing.plugin.ui_x = event.x
@@ -900,44 +895,6 @@ class Rig:
         """Request removal of all plugins."""
         for slot in list(self.slots):
             self.request_remove_plugin(slot.label)
-
-    # =========================================================================
-    # State Management (Presets)
-    # =========================================================================
-
-    def get_state(self) -> dict:
-        """Get current rig state as a serializable dict."""
-        slots_state = []
-        for slot in self.slots:
-            slots_state.append(
-                {
-                    "label": slot.label,
-                    "uri": slot.plugin.uri,
-                    "controls": slot.plugin.get_state(),
-                    "bypassed": slot.plugin.bypassed,
-                }
-            )
-
-        return {"slots": slots_state}
-
-    def set_state(self, state: dict):
-        """
-        Restore rig state from a saved dict.
-
-        Note: This requests plugins via REST and waits for WS feedback.
-        """
-        slots_state = state.get("slots", [])
-
-        # Clear existing
-        self.clear()
-
-        # Request plugins (will be created via WS feedback)
-        for slot_state in slots_state:
-            uri = slot_state.get("uri")
-            if uri:
-                # label = self.request_add_plugin(uri)
-                # TODO: restore controls and bypass after WS feedback
-                pass
 
     def __repr__(self):
         slots_str = ", ".join(f"{i}:{s.label}" for i, s in enumerate(self.slots))

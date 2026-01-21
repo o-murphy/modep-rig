@@ -140,7 +140,7 @@ class Plugin:
         self.ui_x: int = 0
         self.ui_y: int = 0
 
-        self._subscribe()
+        # self._subscribe()
 
     def __del__(self):
         self._unsubscribe()
@@ -206,7 +206,7 @@ class Plugin:
         )
 
         plugin._load_controls(effect_data)
-
+        plugin._subscribe()
         return plugin
 
     @staticmethod
@@ -306,16 +306,6 @@ class Plugin:
         """Reset all controls to their default values."""
         for control in self.controls.values():
             self[control.symbol] = control.default
-
-    def get_state(self) -> dict[str, float]:
-        """Get current state of all controls."""
-        return {symbol: ctrl.value for symbol, ctrl in self.controls.items()}
-
-    def set_state(self, state: dict[str, float]) -> None:
-        """Set multiple controls at once."""
-        for symbol, value in state.items():
-            if symbol in self.controls:
-                self[symbol] = value
 
     def __repr__(self) -> str:
         return f"Plugin({self.label}, controls={len(self.controls)})"
