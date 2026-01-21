@@ -273,7 +273,6 @@ class WsClient:
         # Callbacks
         self._on_structural_change: Callable[[str, str], None] | None = None
         self._on_order_change: Callable[[list[str]], None] | None = None
-        self._on_position_change: Callable[[str, float, float], None] | None = None
 
         self._listeners: dict[type, set[Callable[[WsEvent], None]]] = defaultdict(set)
         self._lock = threading.RLock()
@@ -314,11 +313,9 @@ class WsClient:
         self,
         on_structural_change: Callable[[str, str], None] | None = None,
         on_order_change: Callable[[list[str]], None] | None = None,
-        on_position_change: Callable[[str, float, float], None] | None = None,
     ):
         self._on_structural_change = on_structural_change
         self._on_order_change = on_order_change
-        self._on_position_change = on_position_change
 
     # -------------------
     # WsConnection callbacks
@@ -359,10 +356,6 @@ class WsClient:
             case OrderChange(order=order):
                 if self._on_order_change:
                     self._on_order_change(order)
-
-            case PositionChange(label=label, x=x, y=y):
-                if self._on_position_change:
-                    self._on_position_change(label, x, y)
 
             case StructuralChange(msg_type=mt, raw_message=msg):
                 if self._on_structural_change:

@@ -4,13 +4,11 @@ import secrets
 import string
 
 from modep_rig.config import Config, PluginConfig
-from modep_rig.client import BypassChange, Client, ParamChange
+from modep_rig.client import Client, PositionChange
 from modep_rig.plugin import Plugin, Port
 
 
 # Type aliases for callbacks
-OnParamChangeCallback = Callable[[str, str, float], None]  # label, symbol, value
-OnBypassChangeCallback = Callable[[str, bool], None]  # label, bypassed
 OnSlotAddedCallback = Callable[["Slot"], None]  # slot
 OnSlotRemovedCallback = Callable[[str], None]  # label
 OnOrderChangeCallback = Callable[[list[str]], None]  # order (list of labels)
@@ -141,8 +139,9 @@ class Rig:
         self.client.ws.set_callbacks(
             on_structural_change=self._on_structural_change,
             on_order_change=self._on_order_change,
-            on_position_change=self._on_position_change,
         )
+
+        self.client.ws.on(PositionChange, self._on_position_change)
 
         # If the client was created with connect=False we need to start it now so the
         # callbacks will receive the server's initial messages. Otherwise connecting
@@ -269,7 +268,7 @@ class Rig:
         if self._ext_on_order_change:
             self._ext_on_order_change(order)
 
-    def _on_position_change(self, label: str, x: float, y: float):
+    def _on_position_change(self, event: PositionChange):
         """Handle position change from WebSocket.
 
         Updates slot position and reorders slots based on new coordinates.
@@ -278,18 +277,20 @@ class Rig:
         if self._normalizing:
             return
 
-        slot = self._find_slot_by_label(label)
+        slot = self._find_slot_by_label(event.label)
         if not slot:
-            print(f"  Position change for unknown slot {label}, ignoring")
+            print(f"  Position change for unknown slot {event.label}, ignoring")
             return
 
         old_x = slot.plugin.ui_x
         old_y = slot.plugin.ui_y
 
-        slot.plugin.ui_x = x
-        slot.plugin.ui_y = y
+        slot.plugin.ui_x = event.x
+        slot.plugin.ui_y = event.y
 
-        print(f"Rig << POSITION: {label} ({old_x}, {old_y}) -> ({x}, {y})")
+        print(
+            f"Rig << POSITION: {event.label} ({old_x}, {old_y}) -> ({event.x}, {event.y})"
+        )
 
         # Skip reordering during initialization
         if self._initializing:
