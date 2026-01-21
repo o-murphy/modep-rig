@@ -227,7 +227,7 @@ class WsConnection:
 
     def send(self, message: str) -> bool:
         """Send raw message over WebSocket."""
-        if not self.is_connected:
+        if not self.connected:
             return False
         try:
             self._ws.send(message)
@@ -238,7 +238,7 @@ class WsConnection:
             return False
 
     @property
-    def is_connected(self) -> bool:
+    def connected(self) -> bool:
         return self._connected.is_set()
 
     # ------------------------------------------------------------------ #
@@ -394,7 +394,7 @@ class WsClient:
 
     def effect_param_set(self, label: str, symbol: str, value) -> bool:
         command = f"param_set /graph/{label}/{symbol} {value}"
-        if self.conn.is_connected:
+        if self.conn.connected:
             print(f"WS >> {command}")
             return self.conn.send(command)
         return False
@@ -404,7 +404,7 @@ class WsClient:
 
     def plugin_position(self, label: str, x: float, y: float) -> bool:
         command = f"plugin_pos /graph/{label} {float(x)} {float(y)}"
-        if self.conn.is_connected:
+        if self.conn.connected:
             print(f"WS >> {command}")
             return self.conn.send(command)
         return False

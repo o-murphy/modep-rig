@@ -153,7 +153,7 @@ class Rig:
             if (
                 not self.client.ws
                 or not self.client.ws.conn
-                or not self.client.ws.conn.is_connected
+                or not self.client.ws.conn.connected
             ):
                 # best-effort connect (WsClient.connect() is idempotent)
                 self.client.ws.connect()
