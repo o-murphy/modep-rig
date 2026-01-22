@@ -3,14 +3,14 @@ import json
 import base64
 import threading
 import requests
-import time
 
 # --- Глобальні константи та стан (аналог JS var ...) ---
-VERSION = "1.12.0" # Потрібно для запитів /effect/get
+VERSION = "1.12.0"  # Потрібно для запитів /effect/get
 cached_cpuLoad = None
 cached_xruns = None
 timeout_xruns = None
 pb_loading = True
+
 
 class DesktopState:
     def __init__(self, host):
@@ -27,14 +27,15 @@ class DesktopState:
         self.pedalboard_modified = modified
         print(f"[State] Modified: {modified}")
 
+
 class ModAudioClient:
     def __init__(self, host="modduo.local"):
         self.host = host
         self.url = f"ws://{host}/websocket"
         self.desktop = DesktopState(host)
         self.ws = None
-        
-        self.dataReadyCounter = ''
+
+        self.dataReadyCounter = ""
         self.dataReadyTimeout = None
         self.empty = False
         self.modified = False
@@ -43,22 +44,26 @@ class ModAudioClient:
         if self.dataReadyTimeout:
             self.dataReadyTimeout.cancel()
             trigger_new = True
-        
+
         if trigger_new:
+
             def send_msg():
                 try:
                     if self.ws and self.ws.sock and self.ws.sock.connected:
                         self.ws.send(f"data_ready {self.dataReadyCounter}")
-                except: pass
+                except:
+                    pass
+
             self.dataReadyTimeout = threading.Timer(0.05, send_msg)
             self.dataReadyTimeout.start()
 
     def on_message(self, ws, message):
         global cached_cpuLoad, cached_xruns, timeout_xruns, pb_loading
-        
+
         data = message
         cmd_parts = data.split(" ", 1)
-        if not cmd_parts: return
+        if not cmd_parts:
+            return
         cmd = cmd_parts[0]
 
         # 1. Без аргументів
@@ -73,7 +78,7 @@ class ModAudioClient:
             return
 
         # Відокремлюємо аргументи (data.substr(cmd.length+1))
-        args_str = data[len(cmd)+1:] if len(data) > len(cmd) else ""
+        args_str = data[len(cmd) + 1 :] if len(data) > len(cmd) else ""
 
         # 2. data_ready
         if cmd == "data_ready":
@@ -91,7 +96,7 @@ class ModAudioClient:
         self.trigger_delayed_ready_response(False)
 
         # 4. Основний масив команд (як в оригіналі)
-        
+
         if cmd == "stats":
             p = args_str.split(" ", 1)
             cpuLoad, xruns = float(p[0]), int(p[1])
@@ -106,7 +111,7 @@ class ModAudioClient:
         if cmd == "sys_stats":
             p = args_str.split(" ", 2)
             mem, freq, temp = float(p[0]), int(p[1]), int(p[2])
-            print(f"SYS: RAM {mem}%, {freq/1000000}GHz, {temp/1000}C")
+            print(f"SYS: RAM {mem}%, {freq / 1000000}GHz, {temp / 1000}C")
             return
 
         if cmd == "output_set":
@@ -116,8 +121,13 @@ class ModAudioClient:
 
         if cmd == "patch_set":
             sdata = args_str.split(" ", 3)
-            instance, writable, uri, vtype = sdata[0], int(sdata[1]) != 0, sdata[2], sdata[3]
-            vdata = args_str[len(" ".join(sdata))+1:]
+            instance, writable, uri, vtype = (
+                sdata[0],
+                int(sdata[1]) != 0,
+                sdata[2],
+                sdata[3],
+            )
+            vdata = args_str[len(" ".join(sdata)) + 1 :]
             print(f"Patch Set: {instance} {uri} = {vdata}")
             return
 
@@ -139,7 +149,7 @@ class ModAudioClient:
         if cmd == "pedal_snapshot":
             p = args_str.split(" ", 1)
             index = int(p[0])
-            name = args_str[len(p[0])+1:]
+            name = args_str[len(p[0]) + 1 :]
             self.desktop.pedalboard_preset_id = index
             self.desktop.pedalboard_preset_name = name
             return
@@ -150,7 +160,7 @@ class ModAudioClient:
             dividers = json.loads(p[8].replace("'", '"'))
             page = int(p[9]) if p[9] != "null" else None
             subpage = int(p[10]) if p[10] != "null" else None
-            feedback, coloured, momentary = int(p[12])==1, int(p[13])==1, int(p[14])
+            feedback, coloured, momentary = int(p[12]) == 1, int(p[13]) == 1, int(p[14])
             print(f"HW Map: {label} on actuator {p[2]}")
             return
 
@@ -167,24 +177,36 @@ class ModAudioClient:
 
         if cmd == "add":
             p = args_str.split(" ", 6)
-            instance, uri, x, y, bypassed, pVer, offBuild = p[0], p[1], float(p[2]), float(p[3]), int(p[4])!=0, p[5], int(p[6])!=0
-            
+            instance, uri, x, y, bypassed, pVer, offBuild = (
+                p[0],
+                p[1],
+                float(p[2]),
+                float(p[3]),
+                int(p[4]) != 0,
+                p[5],
+                int(p[6]) != 0,
+            )
+
             if instance not in self.desktop.pedalboard_plugins:
                 self.desktop.pedalboard_plugins[instance] = {}
                 # --- AJAX /effect/get (Критично важливо!) ---
                 try:
-                    resp = requests.get(f"{self.desktop.base_url}/effect/get", params={
-                        'uri': uri, 'version': VERSION, 'plugin_version': pVer
-                    })
+                    resp = requests.get(
+                        f"{self.desktop.base_url}/effect/get",
+                        params={"uri": uri, "version": VERSION, "plugin_version": pVer},
+                    )
                     if resp.status_code == 200:
                         print(f"Plugin {uri} added and metadata fetched")
-                except Exception as e: print(f"HTTP Error: {e}")
+                except Exception as e:
+                    print(f"HTTP Error: {e}")
             return
 
         if cmd == "remove":
             instance = args_str
-            if instance == ":all": self.desktop.pedalboard_plugins.clear()
-            elif instance in self.desktop.pedalboard_plugins: del self.desktop.pedalboard_plugins[instance]
+            if instance == ":all":
+                self.desktop.pedalboard_plugins.clear()
+            elif instance in self.desktop.pedalboard_plugins:
+                del self.desktop.pedalboard_plugins[instance]
             return
 
         if cmd == "loading_start":
@@ -198,27 +220,30 @@ class ModAudioClient:
             snapshotId = int(args_str)
             # --- AJAX /snapshot/name (Критично важливо!) ---
             try:
-                resp = requests.get(f"{self.desktop.base_url}/snapshot/name", params={'id': snapshotId})
+                resp = requests.get(
+                    f"{self.desktop.base_url}/snapshot/name", params={"id": snapshotId}
+                )
                 if resp.status_code == 200:
                     json_resp = resp.json()
-                    self.desktop.pedalboard_preset_name = json_resp.get('name', '')
+                    self.desktop.pedalboard_preset_name = json_resp.get("name", "")
                     pb_loading = False
                     print(f"Pedalboard Loaded: {self.desktop.pedalboard_preset_name}")
-            except Exception as e: print(f"HTTP Error: {e}")
+            except Exception as e:
+                print(f"HTTP Error: {e}")
             return
 
         if cmd == "act_add":
-            metadata = json.loads(base64.b64decode(args_str).decode('utf-8'))
+            metadata = json.loads(base64.b64decode(args_str).decode("utf-8"))
             return
 
         if cmd == "log":
             p = args_str.split(" ", 1)
-            ltype, lmsg = int(p[0]), args_str[len(p[0])+1:]
+            ltype, lmsg = int(p[0]), args_str[len(p[0]) + 1 :]
             print(f"[LOG {ltype}] {lmsg}")
             return
 
         if cmd == "rescan":
-            resp = json.loads(base64.b64decode(args_str).decode('utf-8'))
+            resp = json.loads(base64.b64decode(args_str).decode("utf-8"))
             return
 
     def run(self):
@@ -227,10 +252,11 @@ class ModAudioClient:
             self.url,
             on_message=self.on_message,
             on_error=lambda ws, e: print(f"Error: {e}"),
-            on_close=lambda ws, s, m: print("Closed")
+            on_close=lambda ws, s, m: print("Closed"),
         )
         self.ws.run_forever()
 
+
 if __name__ == "__main__":
-    client = ModAudioClient("127.0.0.1:18181") # Вкажіть IP або хост
+    client = ModAudioClient("127.0.0.1:18181")  # Вкажіть IP або хост
     client.run()

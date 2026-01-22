@@ -38,7 +38,7 @@ IGNORE_MESSAGES = frozenset(["stats", "sys_stats", "ping"])
 
 
 @dataclass(frozen=True)
-class HwPort:
+class AddHwPort:
     name: str
     is_output: bool
 
@@ -93,7 +93,7 @@ class PluginRemove:
 # --------------------
 # Union of all possible events
 WsEvent = (
-    HwPort
+    AddHwPort
     | HardwareReady
     | ParamSet
     | ParamSetBypass
@@ -124,7 +124,7 @@ class WsProtocol:
             port_type = parts[2]
             is_graph_output = parts[3] == "1"
             if port_type == "audio" and port_path.startswith("/graph/"):
-                return HwPort(name=port_path[7:], is_output=is_graph_output)
+                return AddHwPort(name=port_path[7:], is_output=is_graph_output)
 
         if msg_type == "loading_end":
             return HardwareReady(inputs=[], outputs=[])
@@ -428,7 +428,7 @@ class WsClient:
     def effect_bypass(self, label: str, bypass: bool) -> bool:
         return self.effect_param_set(label, ":bypass", 1 if bypass else 0)
 
-    def plugin_position(self, label: str, x: float, y: float) -> bool:
+    def plugin_pos(self, label: str, x: float, y: float) -> bool:
         command = f"plugin_pos /graph/{label} {float(x)} {float(y)}"
         if self.conn.connected:
             print(f"WS >> {command}")
@@ -579,7 +579,7 @@ class Client:
         return self.effect_param_set(label, ":bypass", 1 if bypass else 0)
 
     def effect_param_set(self, label: str, symbol: str, value: Any):
-        return self._post(f"/effect/parameter/set/", f"/graph/{label}/{symbol}/{value}")
+        return self._post("/effect/parameter/set/", f"/graph/{label}/{symbol}/{value}")
 
     def effect_preset_load(self, label: str, preset_uri: str):
         """Завантажити пресет для ефекту"""
@@ -589,7 +589,7 @@ class Client:
         """Змінити позицію ефекту на UI"""
         # Prefer WebSocket plugin_pos command when available (real-time UI placement)
         try:
-            if self.ws and self.ws.plugin_position(label, x, y):
+            if self.ws and self.ws.plugin_pos(label, x, y):
                 return True
         except Exception as e:
             print(f"  WebSocket position failed, using REST fallback: {e}")

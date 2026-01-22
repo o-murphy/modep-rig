@@ -117,10 +117,13 @@ class Rig:
             self.client = client
 
         # Determine hardware ports (auto-detect or from config)
-        hw_inputs, hw_outputs = self._resolve_hardware_ports()
+        # hw_inputs, hw_outputs = self._resolve_hardware_ports()
 
-        self.input_slot = HardwareSlot(ports=hw_inputs, is_input=True)
-        self.output_slot = HardwareSlot(ports=hw_outputs, is_input=False)
+        # self.input_slot = HardwareSlot(ports=hw_inputs, is_input=True)
+        # self.output_slot = HardwareSlot(ports=hw_outputs, is_input=False)
+
+        self.input_slot = HardwareSlot(ports=[], is_input=True)
+        self.output_slot = HardwareSlot(ports=[], is_input=False)
 
         # Slots list - порядок визначається по координатах (x, y)
         self.slots: list[Slot] = []
