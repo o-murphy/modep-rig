@@ -161,6 +161,8 @@ class Rig:
 
     def _on_loading_end(self, event: LoadingEnd):
         self._loading = False
+        self._normalize_positions()
+        self.reconnect_seamless()
 
     def _on_hw_port_added(self, event: AddHwPort):
         hw_config = self.config.hardware
