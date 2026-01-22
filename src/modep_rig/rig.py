@@ -147,7 +147,7 @@ class Rig:
         self.client.ws.on(PluginRemove, self._on_plugin_removed)
         self.client.ws.on(PluginPos, self._on_position_change)
         self.client.ws.on(LoadingEnd, self._on_loading_end)
-        
+
     def __del__(self):
         self.client.ws.off(LoadingStart, self._on_loading_start)
         self.client.ws.off(AddHwPort, self._on_hw_port_added)
@@ -163,37 +163,23 @@ class Rig:
         self._loading = False
 
     def _on_hw_port_added(self, event: AddHwPort):
+        hw_config = self.config.hardware
+
         if event.is_output:
             slot: HardwareSlot = self.output_slot
+            if hw_config.outputs is not None:
+                slot._ports = hw_config.outputs
+                print("HW Outputs Overriden:", slot._ports)
+            elif event.name not in slot._ports:
+                slot._ports.append(event.name)
+
         else:
             slot: HardwareSlot = self.input_slot
-        if event.name not in slot._ports:
-            slot._ports.append(event.name)
-
-        # TODO: resolve overrides (_resolve_hardware_ports)
-
-    # def _resolve_hardware_ports(self) -> tuple[list[str], list[str]]:
-    #     """Resolve hardware ports from config or auto-detect from MOD-UI."""
-    #     hw_config = self.config.hardware
-
-    #     if hw_config.inputs is not None:
-    #         inputs = hw_config.inputs
-    #     else:
-    #         inputs, _ = self.client.get_hardware_ports(timeout=5.0)
-    #         if not inputs:
-    #             print("⚠️ No hardware inputs detected, using defaults")
-    #             inputs = ["capture_1", "capture_2"]
-
-    #     if hw_config.outputs is not None:
-    #         outputs = hw_config.outputs
-    #     else:
-    #         _, outputs = self.client.get_hardware_ports(timeout=0.1)
-    #         if not outputs:
-    #             print("⚠️ No hardware outputs detected, using defaults")
-    #             outputs = ["playback_1", "playback_2"]
-
-    #     print(f"Hardware ports: inputs={inputs}, outputs={outputs}")
-    #     return inputs, outputs
+            if hw_config.inputs is not None:
+                slot._ports = hw_config.inputs
+                print("HW Inputs Overriden:", slot._ports)
+            elif event.name not in slot._ports:
+                slot._ports.append(event.name)
 
     def set_callbacks(
         self,

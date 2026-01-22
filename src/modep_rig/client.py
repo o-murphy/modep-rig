@@ -47,6 +47,7 @@ class AddHwPort:
 class LoadingStart:
     pass
 
+
 @dataclass(frozen=True)
 class LoadingEnd:
     pass
@@ -356,11 +357,6 @@ class WsClient:
         )
         self._lock = threading.RLock()
 
-        # Hardware / Pedalboard state
-        self._hw_audio_inputs: list[str] = []
-        self._hw_audio_outputs: list[str] = []
-        self._hw_ready = threading.Event()
-
         # Transport
         self.conn = WsConnection(
             self.ws_url,
@@ -397,7 +393,6 @@ class WsClient:
         print(f"Підключено до WebSocket: {self.ws_url}")
         self._hw_audio_inputs.clear()
         self._hw_audio_outputs.clear()
-        self._hw_ready.clear()
 
     def _on_message(self, message: str):
         event = WsProtocol.parse(message)
@@ -441,21 +436,6 @@ class WsClient:
             print(f"WS >> {command}")
             return self.conn.send(command)
         return False
-
-    def get_hardware_ports(self, timeout: float = 5.0) -> tuple[list[str], list[str]]:
-        if not self.conn._connected.wait(timeout):
-            print(f"⚠️ WS not connected after {timeout}s")
-            return [], []
-        self._hw_ready.wait(timeout)
-        return list(self._hw_audio_inputs), list(self._hw_audio_outputs)
-
-    @property
-    def hw_inputs(self) -> list[str]:
-        return list(self._hw_audio_inputs)
-
-    @property
-    def hw_outputs(self) -> list[str]:
-        return list(self._hw_audio_outputs)
 
 
 # -----------------------------
@@ -722,14 +702,3 @@ class Client:
     def system_prefs(self):
         """Отримати системні налаштування"""
         return self._get("/system/prefs")
-
-    def get_hardware_ports(self, timeout: float = 5.0) -> tuple[list[str], list[str]]:
-        """Get hardware audio ports discovered via WebSocket.
-
-        Args:
-            timeout: Max time to wait for ports discovery (seconds)
-
-        Returns:
-            Tuple of (inputs, outputs) port name lists
-        """
-        return self.ws.get_hardware_ports(timeout)
