@@ -99,8 +99,8 @@ WsEvent = (
     | ParamSetBypass
     | PluginPos
     | GenericMessage
-    | PluginAdd,
-    PluginRemove,
+    | PluginAdd
+    | PluginRemove
 )
 
 

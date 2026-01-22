@@ -56,13 +56,12 @@ class ControlWidget(QWidget):
     def __init__(self, control: ControlPort, parent=None):
         super().__init__(parent)
         self.control = control
-        self._updating = False
 
     def set_value_silent(self, value: float):
         """Set value without emitting signal."""
-        self._updating = True
+        self.blockSignals(True)
         self._set_widget_value(value)
-        self._updating = False
+        self.blockSignals(False)
 
     def _set_widget_value(self, value: float):
         """Override in subclass."""
@@ -70,8 +69,7 @@ class ControlWidget(QWidget):
 
     def _emit_change(self, value: float):
         """Emit value change if not updating."""
-        if not self._updating:
-            self.value_changed.emit(self.control.symbol, value)
+        self.value_changed.emit(self.control.symbol, value)
 
 
 class KnobControl(ControlWidget):
@@ -438,7 +436,6 @@ class ControlsPanel(QScrollArea):
         self.current_label: str | None = None
         self.control_widgets: dict[str, ControlWidget] = {}
         self.bypass_checkbox: QCheckBox | None = None
-        self._updating_bypass = False
 
         # Placeholder
         self.placeholder = QLabel("Select a plugin to see controls")
@@ -535,14 +532,12 @@ class ControlsPanel(QScrollArea):
     def set_bypass_silent(self, bypassed: bool):
         """Set bypass checkbox without emitting signal."""
         if self.bypass_checkbox:
-            self._updating_bypass = True
+            self.blockSignals(True)
             self.bypass_checkbox.setChecked(bypassed)
-            self._updating_bypass = False
+            self.blockSignals(False)
 
     def _on_bypass_changed(self, state):
         """Handle bypass checkbox change."""
-        if self._updating_bypass:
-            return
         if self.plugin:
             self.plugin.bypass(state)
 
