@@ -28,86 +28,12 @@ class Port:
     graph_path: str
 
 
-class ControlsProxy:
-    """
-    Dict-like proxy for plugin controls with API synchronization.
-
-    Supports:
-        plugin.controls['Dist']          # Get ControlPort object
-        plugin.controls['Dist'] = 0.5    # Set value via API
-        plugin.controls.Dist             # Attribute access
-        'Dist' in plugin.controls        # Check if control exists
-        list(plugin.controls)            # Iterate over symbols
-    """
-
-    def __init__(self, plugin: "Plugin"):
-        self._plugin = plugin
-        self._controls: dict[str, ControlPort] = {}
-
-    def _populate(self, controls: list[ControlPort]) -> None:
-        """Populate controls from parsed data."""
-        self._controls = {c.symbol: c for c in controls}
-
-    def __getitem__(self, symbol: str) -> ControlPort:
-        if symbol not in self._controls:
-            raise KeyError(
-                f"Control '{symbol}' not found. Available: {list(self._controls.keys())}"
-            )
-        return self._controls[symbol]
-
-    def __setitem__(self, symbol: str, value: float) -> None:
-        """Set control value and sync to API."""
-        if symbol not in self._controls:
-            raise KeyError(
-                f"Control '{symbol}' not found. Available: {list(self._controls.keys())}"
-            )
-
-        control = self._controls[symbol]
-        control.value = value  # This clamps the value
-
-        # Sync to API via POST
-        self._plugin._set_param(symbol, control.value)
-
-    def __getattr__(self, symbol: str) -> ControlPort:
-        """Allow attribute-style access: controls.Dist"""
-        if symbol.startswith("_"):
-            raise AttributeError(symbol)
-        try:
-            return self[symbol]
-        except KeyError:
-            raise AttributeError(f"Control '{symbol}' not found")
-
-    def __contains__(self, symbol: str) -> bool:
-        return symbol in self._controls
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self._controls)
-
-    def __len__(self) -> int:
-        return len(self._controls)
-
-    def keys(self):
-        return self._controls.keys()
-
-    def values(self):
-        return self._controls.values()
-
-    def items(self):
-        return self._controls.items()
-
-    def __repr__(self) -> str:
-        items = [f"{k}={v.format_value()}" for k, v in self._controls.items()]
-        return f"Controls({', '.join(items)})"
-
-
 class Plugin:
     """
     A loaded plugin instance with control management.
 
     Provides dict-like access to controls:
         plugin['Dist']          # Get current value
-        plugin['Dist'] = 0.5    # Set value via API
-        plugin.controls['Dist'] # Get ControlPort object with metadata
 
     Attributes:
         uri: Plugin URI
@@ -115,7 +41,6 @@ class Plugin:
         name: Display name
         inputs: Audio input ports
         outputs: Audio output ports
-        controls: ControlsProxy for parameter access
         slot: Reference to containing Slot
     """
 
@@ -134,11 +59,12 @@ class Plugin:
         self.name = name
         self.inputs = inputs
         self.outputs = outputs
-        self.controls = ControlsProxy(self)
         self._bypassed = False
         # ui pos
         self.ui_x: int = 0
         self.ui_y: int = 0
+
+        self._controls: dict[str, ControlPort] = {}
 
         # self._subscribe()
 
@@ -162,7 +88,7 @@ class Plugin:
 
     def _on_param_change(self, event: ParamSet):
         if self.label == event.label and event.symbol in self.controls:
-            self.set_control_value(event.symbol, event.value)
+            self.set_cached_value(event.symbol, event.value)
 
     def _on_position_change(self, event: PluginPos):
         if self.label == event.label:
@@ -264,27 +190,40 @@ class Plugin:
     def _load_controls(self, effect_data: dict[str, Any]) -> None:
         """Load control metadata from effect_get response."""
         controls = parse_control_ports(effect_data)
-        self.controls._populate(controls)
+        self._populate(controls)
 
-    def _set_param(self, symbol: str, value: float) -> bool:
-        """Set parameter via Client API."""
-        return self.client.ws.effect_param_set(self.label, symbol, value)
+    def _populate(self, controls: list[ControlPort]) -> None:
+        """Populate controls from parsed data."""
+        self._controls = {c.symbol: c for c in controls}
 
     # --- Dict-like access to control values ---
 
-    def __getitem__(self, symbol: str) -> float:
-        """Get current control value."""
-        return self.controls[symbol].value
+    @property
+    def controls(self):
+        return self._controls
 
-    def __setitem__(self, symbol: str, value: float) -> None:
-        """Set control value (syncs to API)."""
-        self.controls[symbol] = value
+    def keys(self):
+        return self._controls.keys()
+
+    def values(self):
+        return self._controls.values()
+
+    def items(self):
+        return self._controls.items()
+
+    def __getitem__(self, symbol: str) -> ControlPort:
+        """Get current cached control value."""
+        if symbol not in self._controls:
+            raise KeyError(
+                f"Control '{symbol}' not found. Available: {list(self._controls.keys())}"
+            )
+        return self._controls[symbol]
 
     def __contains__(self, symbol: str) -> bool:
-        return symbol in self.controls
+        return symbol in self._controls
 
     def __iter__(self) -> Iterator[str]:
-        return iter(self.controls)
+        return iter(self._controls)
 
     # --- Convenience methods ---
 
@@ -293,19 +232,27 @@ class Plugin:
         """Whether plugin is currently bypassed."""
         return self._bypassed
 
-    def bypass(self, enabled: bool = True) -> bool:
+    def bypass(self, bypass: bool = True) -> bool:
         """Enable/disable bypass for this plugin. Set bypass via Client API."""
-        return self.client.ws.effect_bypass(self.label, enabled)
+        self.client.ws.effect_bypass(self.label, bypass)
+        return self.client.effect_bypass(self.label, bypass)
 
-    def set_control_value(self, symbol: str, value: float) -> None:
+    def param_set(self, symbol: str, value: float) -> bool:
+        """Set parameter via Client API."""
+        if symbol not in self._controls:
+            raise KeyError(
+                f"Control '{symbol}' not found. Available: {list(self._controls.keys())}"
+            )
+
+        # Sync to API via POST
+        self.client.ws.effect_param_set(self.label, symbol, value)
+        return self.client.effect_param_set(self.label, symbol, value)
+
+    def set_cached_value(self, symbol: str, value: float) -> None:
         """Set control value locally without API call (for WS sync)."""
-        if symbol in self.controls._controls:
-            self.controls._controls[symbol].value = value
-
-    def reset_to_defaults(self) -> None:
-        """Reset all controls to their default values."""
-        for control in self.controls.values():
-            self[control.symbol] = control.default
+        if symbol in self._controls:
+            self._controls[symbol].value = value
 
     def __repr__(self) -> str:
-        return f"Plugin({self.label}, controls={len(self.controls)})"
+        items = [f"{k}={v.format_value()}" for k, v in self._controls.items()]
+        return f"Plugin({self.label}, controls={', '.join(items)})"

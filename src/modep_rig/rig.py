@@ -156,11 +156,6 @@ class Rig:
         #     # ignore and proceed; connect may have already been started elsewhere
         #     pass
 
-        # Wait for the initial pedalboard to load (loading_end message)
-        # This ensures we don't return before receiving all initial plugin/connection messages
-        print("Waiting for WebSocket pedalboard ready signal...")
-        self.client.ws.wait_pedalboard_ready(timeout=10.0)
-
         # Initialization complete - reconnections will now happen normally
         self._initializing = False
 

@@ -2,7 +2,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 import time
 import threading
-from typing import Callable, Type, TypeVar
+from typing import Any, Callable, Type, TypeVar
 from urllib.parse import unquote, urlparse
 
 import requests
@@ -298,7 +298,7 @@ class WsConnection:
 WsEventT = TypeVar("WsEventT", bound=WsEvent)
 
 
-class StateHandler:
+class StateSnapshot:
     def __init__(self):
         # ключ = тип події, значення = список подій
         self._events: defaultdict[type, list] = defaultdict(list)
@@ -342,7 +342,7 @@ class WsClient:
         self.ws_url = f"{scheme}://{hostname}:{port}/websocket"
         print("WS:", self.ws_url)
 
-        self._state = StateHandler()
+        self._state = StateSnapshot()
 
         self._listeners: defaultdict[Type[WsEvent], set[Callable[[WsEvent], None]]] = (
             defaultdict(set)
@@ -353,7 +353,6 @@ class WsClient:
         self._hw_audio_inputs: list[str] = []
         self._hw_audio_outputs: list[str] = []
         self._hw_ready = threading.Event()
-        self._pedalboard_ready = threading.Event()
 
         # Transport
         self.conn = WsConnection(
@@ -392,7 +391,6 @@ class WsClient:
         self._hw_audio_inputs.clear()
         self._hw_audio_outputs.clear()
         self._hw_ready.clear()
-        self._pedalboard_ready.clear()
 
     def _on_message(self, message: str):
         event = WsProtocol.parse(message)
@@ -444,12 +442,6 @@ class WsClient:
         self._hw_ready.wait(timeout)
         return list(self._hw_audio_inputs), list(self._hw_audio_outputs)
 
-    def wait_pedalboard_ready(self, timeout: float = 10.0) -> bool:
-        if self._pedalboard_ready.wait(timeout):
-            return True
-        print(f"⚠️ Pedalboard not ready after {timeout}s")
-        return False
-
     @property
     def hw_inputs(self) -> list[str]:
         return list(self._hw_audio_inputs)
@@ -495,10 +487,10 @@ class Client:
         return "0.0.0"
 
     def _load_effects_list(self):
-        data = self._request("/effect/list")
+        data = self._get("/effect/list")
         self.effects_list = data if isinstance(data, list) else []
 
-    def _request(self, path: str, **kwargs):
+    def _get(self, path: str, **kwargs):
         url = self.base_url + path
         print(f"GET {url}")
         if kwargs:
@@ -547,7 +539,7 @@ class Client:
 
     def effect_list(self):
         """Отримати список всіх доступних ефектів"""
-        data = self._request("/effect/list")
+        data = self._get("/effect/list")
         self.effects_list = data if isinstance(data, list) else []
         return self.effects_list
 
@@ -560,36 +552,38 @@ class Client:
 
     def effect_get(self, uri: str):
         """Отримати детальну інформацію про ефект"""
-        return self._request("/effect/get", uri=uri, version=self.version)
+        return self._get("/effect/get", uri=uri, version=self.version)
 
     def effect_add(
         self, label: str, uri: str, x: int = 200, y: int = 400
     ) -> dict | None:
         """Додати ефект на граф"""
-        return self._request(f"/effect/add//graph/{label}", uri=uri, x=x, y=y)
+        return self._get(f"/effect/add//graph/{label}", uri=uri, x=x, y=y)
 
     def effect_remove(self, label: str) -> bool:
         """Видалити ефект з графа"""
-        result = self._request(f"/effect/remove//graph/{label}")
+        result = self._get(f"/effect/remove//graph/{label}")
         return result is True
 
     def effect_connect(self, output: str, input: str) -> bool:
         """З'єднати два порти"""
-        result = self._request(f"/effect/connect//graph/{output},/graph/{input}")
+        result = self._get(f"/effect/connect//graph/{output},/graph/{input}")
         return result is True
 
     def effect_disconnect(self, output: str, input: str) -> bool:
         """Роз'єднати два порти"""
-        result = self._request(f"/effect/disconnect//graph/{output},/graph/{input}")
+        result = self._get(f"/effect/disconnect//graph/{output},/graph/{input}")
         return result is True
 
-    def effect_parameter_get(self, label: str, symbol: str):
-        """Отримати значення параметра ефекту"""
-        return self._request(f"/effect/parameter/get//graph/{label}/{symbol}")
+    def effect_bypass(self, label, bypass: bool) -> Any:
+        return self.effect_param_set(label, ":bypass", 1 if bypass else 0)
+
+    def effect_param_set(self, label: str, symbol: str, value: Any):
+        return self._post(f"/effect/parameter/set/", f"/graph/{label}/{symbol}/{value}")
 
     def effect_preset_load(self, label: str, preset_uri: str):
         """Завантажити пресет для ефекту"""
-        return self._request(f"/effect/preset/load//graph/{label}", uri=preset_uri)
+        return self._get(f"/effect/preset/load//graph/{label}", uri=preset_uri)
 
     def effect_position(self, label: str, x: int, y: int):
         """Змінити позицію ефекту на UI"""
@@ -601,7 +595,7 @@ class Client:
             print(f"  WebSocket position failed, using REST fallback: {e}")
 
         # Fallback to REST endpoint
-        return self._request(f"/effect/position//graph/{label}/{x}/{y}")
+        return self._get(f"/effect/position//graph/{label}/{x}/{y}")
 
     # =========================================================================
     # Pedalboard API
@@ -609,15 +603,15 @@ class Client:
 
     def pedalboard_list(self):
         """Отримати список всіх педалбордів"""
-        return self._request("/pedalboard/list")
+        return self._get("/pedalboard/list")
 
     def pedalboard_current(self):
         """Отримати поточний стан педалборда"""
-        return self._request("/pedalboard/current")
+        return self._get("/pedalboard/current")
 
     def pedalboard_load_bundle(self, pedalboard: str, is_default: int = 0):
         """Завантажити педалборд з бандла"""
-        return self._request(
+        return self._get(
             "/pedalboard/load_bundle", bundlepath=pedalboard, isDefault=is_default
         )
 
@@ -626,19 +620,19 @@ class Client:
         params = {}
         if title:
             params["title"] = title
-        return self._request("/pedalboard/save", **params)
+        return self._get("/pedalboard/save", **params)
 
     def pedalboard_save_as(self, title: str):
         """Зберегти педалборд під новим ім'ям"""
-        return self._request("/pedalboard/save_as", title=title)
+        return self._get("/pedalboard/save_as", title=title)
 
     def pedalboard_remove(self, bundlepath: str):
         """Видалити педалборд"""
-        return self._request("/pedalboard/remove", bundlepath=bundlepath)
+        return self._get("/pedalboard/remove", bundlepath=bundlepath)
 
     def pedalboard_info(self, bundlepath: str):
         """Отримати інформацію про педалборд"""
-        return self._request("/pedalboard/info", bundlepath=bundlepath)
+        return self._get("/pedalboard/info", bundlepath=bundlepath)
 
     # =========================================================================
     # Snapshot API
@@ -646,23 +640,23 @@ class Client:
 
     def snapshot_list(self):
         """Отримати список снепшотів"""
-        return self._request("/snapshot/list")
+        return self._get("/snapshot/list")
 
     def snapshot_load(self, snapshot_id: int):
         """Завантажити снепшот"""
-        return self._request(f"/snapshot/load/{snapshot_id}")
+        return self._get(f"/snapshot/load/{snapshot_id}")
 
     def snapshot_save(self):
         """Зберегти поточний снепшот"""
-        return self._request("/snapshot/save")
+        return self._get("/snapshot/save")
 
     def snapshot_save_as(self, name: str):
         """Зберегти снепшот під новим ім'ям"""
-        return self._request("/snapshot/save_as", name=name)
+        return self._get("/snapshot/save_as", name=name)
 
     def snapshot_remove(self, snapshot_id: int):
         """Видалити снепшот"""
-        return self._request(f"/snapshot/remove/{snapshot_id}")
+        return self._get(f"/snapshot/remove/{snapshot_id}")
 
     # =========================================================================
     # Banks API
@@ -670,11 +664,11 @@ class Client:
 
     def banks_list(self):
         """Отримати список банків"""
-        return self._request("/banks/list")
+        return self._get("/banks/list")
 
     def banks_save(self):
         """Зберегти банки"""
-        return self._request("/banks/save")
+        return self._get("/banks/save")
 
     # =========================================================================
     # MIDI API
@@ -682,7 +676,7 @@ class Client:
 
     def midi_learn(self, label: str, symbol: str):
         """Почати MIDI learn для параметра"""
-        return self._request(f"/effect/midi/learn//graph/{label}/{symbol}")
+        return self._get(f"/effect/midi/learn//graph/{label}/{symbol}")
 
     def midi_map(
         self,
@@ -694,13 +688,13 @@ class Client:
         maximum: float = 1.0,
     ):
         """Призначити MIDI CC на параметр"""
-        return self._request(
+        return self._get(
             f"/effect/midi/map//graph/{label}/{symbol}/{channel}/{cc}/{minimum}/{maximum}"
         )
 
     def midi_unmap(self, label: str, symbol: str):
         """Видалити MIDI mapping з параметра"""
-        return self._request(f"/effect/midi/unmap//graph/{label}/{symbol}")
+        return self._get(f"/effect/midi/unmap//graph/{label}/{symbol}")
 
     # =========================================================================
     # System API
@@ -708,19 +702,19 @@ class Client:
 
     def ping(self):
         """Health check"""
-        return self._request("/ping")
+        return self._get("/ping")
 
     def reset(self):
         """Скинути стан (видалити всі ефекти)"""
-        return self._request("/reset")
+        return self._get("/reset")
 
     def system_info(self):
         """Отримати інформацію про систему"""
-        return self._request("/system/info")
+        return self._get("/system/info")
 
     def system_prefs(self):
         """Отримати системні налаштування"""
-        return self._request("/system/prefs")
+        return self._get("/system/prefs")
 
     def get_hardware_ports(self, timeout: float = 5.0) -> tuple[list[str], list[str]]:
         """Get hardware audio ports discovered via WebSocket.

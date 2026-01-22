@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from modep_rig.client import ParamSetBypass, ParamSet
+from modep_rig.plugin import Plugin
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
@@ -432,7 +433,7 @@ class ControlsPanel(QScrollArea):
         self.layout.setAlignment(Qt.AlignTop)
         self.setWidget(self.container)
 
-        self.plugin = None
+        self.plugin: Plugin | None = None
         self.current_label: str | None = None
         self.control_widgets: dict[str, ControlWidget] = {}
         self.bypass_checkbox: QCheckBox | None = None
@@ -484,8 +485,8 @@ class ControlsPanel(QScrollArea):
         row, col = 0, 0
         max_cols = 3
 
-        for symbol in plugin.controls:
-            control = plugin.controls[symbol]
+        for symbol in plugin:
+            control = plugin[symbol]
             widget = create_control_widget(control)
             widget.value_changed.connect(self._on_control_changed)
             self.control_widgets[symbol] = widget
@@ -527,7 +528,7 @@ class ControlsPanel(QScrollArea):
     def _on_control_changed(self, symbol: str, value: float):
         """Handle control value change."""
         if self.plugin:
-            self.plugin[symbol] = value
+            self.plugin.param_set(symbol, value)
 
     def set_bypass_silent(self, bypassed: bool):
         """Set bypass checkbox without emitting signal."""
