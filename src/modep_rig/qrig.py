@@ -116,14 +116,12 @@ class KnobControl(ControlWidget):
 
     def _on_slider_changed(self, pos: int):
         value = self._slider_to_value(pos)
-        self.control.value = value
-        self.value_label.setText(self.control.format_value())
+        self.value_label.setText(self.control.format_value(value))
         self._emit_change(value)
 
     def _set_widget_value(self, value: float):
-        self.control.value = value
         self.dial.setValue(self._value_to_slider(value))
-        self.value_label.setText(self.control.format_value())
+        self.value_label.setText(self.control.format_value(value))
 
 
 class ToggleControl(ControlWidget):
@@ -146,7 +144,6 @@ class ToggleControl(ControlWidget):
         self._emit_change(value)
 
     def _set_widget_value(self, value: float):
-        self.control.value = value
         self.checkbox.setChecked(value >= 0.5)
 
 
@@ -189,7 +186,6 @@ class EnumControl(ControlWidget):
             self._emit_change(value)
 
     def _set_widget_value(self, value: float):
-        self.control.value = value
         idx = self._value_to_index(value)
         if idx >= 0:
             self.combo.setCurrentIndex(idx)
@@ -223,14 +219,12 @@ class IntegerControl(ControlWidget):
         layout.addWidget(self.value_label)
 
     def _on_slider_changed(self, value: int):
-        self.control.value = float(value)
-        self.value_label.setText(self.control.format_value())
+        self.value_label.setText(self.control.format_value(value))
         self._emit_change(float(value))
 
     def _set_widget_value(self, value: float):
-        self.control.value = value
         self.slider.setValue(int(value))
-        self.value_label.setText(self.control.format_value())
+        self.value_label.setText(self.control.format_value(value))
 
 
 def create_control_widget(control: ControlPort, parent=None) -> ControlWidget:
@@ -784,7 +778,7 @@ def main():
 
     # Create rig (do not force reset on init — build state from WebSocket)
     print("Connecting to MOD server...")
-    rig = Rig(config, reset_on_init=False)
+    rig = Rig(config)
 
     # Create and run app
     app = QApplication(sys.argv)

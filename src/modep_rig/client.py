@@ -391,8 +391,7 @@ class WsClient:
     # WsConnection callbacks
     def _on_open(self):
         print(f"Підключено до WebSocket: {self.ws_url}")
-        self._hw_audio_inputs.clear()
-        self._hw_audio_outputs.clear()
+        self._state.clear()
 
     def _on_message(self, message: str):
         event = WsProtocol.parse(message)

@@ -89,7 +89,7 @@ class HardwareSlot:
         return self._ports if self._is_input else []
 
     @property
-    def hw_inputs(self) -> list[str]:
+    def inputs(self) -> list[str]:
         """Входи hardware output slot (playback порти)."""
         return self._ports if not self._is_input else []
 
@@ -113,9 +113,7 @@ class Rig:
     - WS handlers: _on_plugin_added(), _on_plugin_removed()
     """
 
-    def __init__(
-        self, config: Config, client: Client | None = None, reset_on_init: bool = False
-    ):
+    def __init__(self, config: Config, client: Client | None = None):
         self.config = config
         # If caller did not provide a Client, create one but delay WebSocket
         # connection until after callbacks are installed to avoid missing messages.
@@ -158,6 +156,7 @@ class Rig:
 
     def _on_loading_start(self, event: LoadingStart):
         self._loading = True
+        self.slots = []
 
     def _on_loading_end(self, event: LoadingEnd):
         self._loading = False
@@ -346,80 +345,58 @@ class Rig:
         # Перевіряємо чи такий слот вже існує
         existing = self._find_slot_by_label(event.label)
         if existing:
-            print(f"Duplicate PluginAdd for {event.label}, ignoring")
+            # Just update position
+            plugin = existing.plugin
+        else:
+            plugin = Plugin.load_supported(
+                self.client,
+                uri=event.uri,
+                label=event.label,
+                config=self.config,
+            )
 
-            # Duplicate WS event, оновлюємо координати якщо є
-            if event.x is not None:
-                existing.plugin.ui_x = event.x
-            if event.y is not None:
-                existing.plugin.ui_y = event.y
-            return
+            if not plugin:
+                print(f"Can not load plugin: {event.label}, {event.uri}")
+                return
 
-        plugin = Plugin.load_supported(
-            self.client,
-            uri=event.uri,
-            label=event.label,
-            config=self.config,
-        )
+            # Створюємо слот
+            slot = Slot(plugin)
 
-        if not plugin:
-            print(f"Can not load plugin: {event.label}, {event.uri}")
-            return
+            # Додаємо слот
+            self.slots.append(slot)
 
-        # Створюємо слот
-        slot = Slot(plugin)
+            print(
+                f"  Created slot: {slot} at index {self.slots.index(slot)} (pos: {event.x}, {event.y})"
+            )
+
+            # Сповіщуємо UI
+            if self._ext_on_slot_added:
+                self._ext_on_slot_added(slot)
 
         # Store UI position on plugin
-        slot.plugin.ui_x = event.x if event.x is not None else 0
-        slot.plugin.ui_y = event.y if event.y is not None else 0
+        plugin.ui_x = event.x if event.x is not None else 0
+        plugin.ui_y = event.y if event.y is not None else 0
 
-        # Додаємо слот
-        self.slots.append(slot)
-
-        print(
-            f"  Created slot: {slot} at index {self.slots.index(slot)} (pos: {event.x}, {event.y})"
-        )
-
-        # Сортуємо і нормалізуємо тільки після завантаження
+        # Сортуємо
         self.slots = self._sort_slots_by_position(self.slots)
+        
+        # Нормалізуємо тільки після завантаження
         if not self._loading:
             self._normalize_positions()
             # Connect into chain UNLESS we're still initializing
             self.reconnect_seamless()
 
-        # Сповіщуємо UI
-        if self._ext_on_slot_added:
-            self._ext_on_slot_added(slot)
-
     def _on_plugin_removed(self, event: PluginRemove):
         """
         Handle plugin removed via WebSocket feedback.
 
-        Reconnects neighbors and removes Slot.
+        Updates local graph state ONLY.
         """
         slot = self._find_slot_by_label(event.label)
         if not slot:
             print(f"  Slot {event.label} not found, skipping")
             return
 
-        slot_idx = self.slots.index(slot)
-
-        # Знаходимо сусідів
-        src = self.input_slot
-        for s in self.slots[:slot_idx]:
-            src = s
-
-        dst = self.output_slot
-        for s in self.slots[slot_idx + 1 :]:
-            dst = s
-            break
-
-        # Reconnect neighbors UNLESS we're still initializing
-        if not self._loading:
-            print(f"  Connecting neighbors: {src} -> {dst}")
-            self._connect_pair(src, dst)
-
-        # Видаляємо слот
         self.slots.remove(slot)
         print(f"  Removed slot: {event.label}")
 
@@ -427,16 +404,9 @@ class Rig:
         if not self._loading and self.slots:
             self._normalize_positions()
 
-        # Сповіщуємо UI
+        # Notify UI
         if self._ext_on_slot_removed:
             self._ext_on_slot_removed(event.label)
-
-    def _on_pedalboard_reset(self):
-        """Handle full pedalboard reset/load."""
-        print("  Full pedalboard reset - clearing local state")
-        self.slots.clear()
-        # TODO: можливо синхронізувати з /pedalboard/current
-        self.reconnect()
 
     # =========================================================================
     # Request API (ініціювання без локальних змін)
@@ -499,20 +469,51 @@ class Rig:
 
     def request_remove_plugin(self, label: str) -> bool:
         """
-        Request to remove plugin via REST.
+        Request plugin removal via REST with pre-connect of neighbors.
 
-        Does NOT remove local slot - waits for WS feedback.
+        Steps:
+        1. Find plugin and its neighbors.
+        2. Pre-connect neighbors to keep audio seamless.
+        3. Call effect_remove.
+        4. If remove fails, fallback to seamless_reconnect.
 
         Args:
             label: Plugin label
 
         Returns:
-            True якщо REST OK
+            True if remove requested successfully, False otherwise
         """
-        result = self.client.effect_remove(label)
+        slot = self._find_slot_by_label(label)
+        if not slot:
+            print(f"Plugin {label} not found locally, cannot remove")
+            return False
 
-        if not result:
-            print(f"REST error: Failed to remove plugin {label}")
+        idx = self.slots.index(slot)
+
+        # Find neighbors
+        src = self.input_slot
+        for s in self.slots[:idx]:
+            src = s
+
+        dst = self.output_slot
+        for s in self.slots[idx + 1:]:
+            dst = s
+            break
+
+        # Pre-connect neighbors
+        if src and dst:
+            print(f"Pre-connecting neighbors before removal: {src} -> {dst}")
+            try:
+                self.client.effect_connect(src.outputs[0], dst.inputs[0])
+            except Exception:
+                print("  Pre-connect failed, will fallback if needed")
+
+        # Attempt removal
+        success = self.client.effect_remove(label)
+        if not success:
+            print(f"REST remove failed for {label}, doing seamless reconnect")
+            if src and dst:
+                self.reconnect_seamless()
             return False
 
         print(f"REST OK: Requested remove {label}, waiting for WS feedback")
@@ -640,7 +641,7 @@ class Rig:
         # Calculate all possible connections (current state unknown, so we consider all)
         all_possible: set[tuple[str, str]] = set()
         all_outputs = list(self.input_slot.outputs)
-        all_inputs = list(self.output_slot.hw_inputs)
+        all_inputs = list(self.output_slot.inputs)
         for slot in self.slots:
             all_outputs.extend(slot.outputs)
             all_inputs.extend(slot.inputs)
@@ -674,7 +675,7 @@ class Rig:
         outputs = src.outputs
 
         if isinstance(dst, HardwareSlot):
-            inputs = dst.hw_inputs
+            inputs = dst.inputs
         else:
             inputs = dst.inputs if hasattr(dst, "inputs") else []
 
@@ -762,7 +763,7 @@ class Rig:
         outputs = src.outputs
 
         if isinstance(dst, HardwareSlot):
-            inputs = dst.hw_inputs
+            inputs = dst.inputs
         else:
             inputs = dst.inputs if hasattr(dst, "inputs") else []
 
@@ -776,7 +777,7 @@ class Rig:
     def _disconnect_everything(self):
         """Disconnect all connections."""
         all_outputs = list(self.input_slot.outputs)
-        all_inputs = list(self.output_slot.hw_inputs)
+        all_inputs = list(self.output_slot.inputs)
 
         for slot in self.slots:
             all_outputs.extend(slot.outputs)
