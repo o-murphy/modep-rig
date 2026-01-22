@@ -4,7 +4,15 @@ import secrets
 import string
 
 from modep_rig.config import Config, PluginConfig
-from modep_rig.client import Client, PluginAdd, PluginPos, PluginRemove
+from modep_rig.client import (
+    AddHwPort,
+    Client,
+    LoadingEnd,
+    LoadingStart,
+    PluginAdd,
+    PluginPos,
+    PluginRemove,
+)
 from modep_rig.plugin import Plugin, Port
 
 
@@ -116,12 +124,6 @@ class Rig:
         else:
             self.client = client
 
-        # Determine hardware ports (auto-detect or from config)
-        # hw_inputs, hw_outputs = self._resolve_hardware_ports()
-
-        # self.input_slot = HardwareSlot(ports=hw_inputs, is_input=True)
-        # self.output_slot = HardwareSlot(ports=hw_outputs, is_input=False)
-
         self.input_slot = HardwareSlot(ports=[], is_input=True)
         self.output_slot = HardwareSlot(ports=[], is_input=False)
 
@@ -129,7 +131,7 @@ class Rig:
         self.slots: list[Slot] = []
 
         # Flag to defer reconnections during initial pedalboard loading
-        self._initializing = True
+        self._loading = True
         # Flag to prevent recursive position updates during normalization
         self._normalizing = False
 
@@ -139,71 +141,59 @@ class Rig:
         self._ext_on_order_change: OnOrderChangeCallback | None = None
 
         # Setup WebSocket callbacks BEFORE connecting so we don't miss initial messages
+        self.client.ws.on(LoadingStart, self._on_loading_start)
+        self.client.ws.on(AddHwPort, self._on_hw_port_added)
         self.client.ws.on(PluginAdd, self._on_plugin_added)
         self.client.ws.on(PluginRemove, self._on_plugin_removed)
         self.client.ws.on(PluginPos, self._on_position_change)
-
-        # # If the client was created with connect=False we need to start it now so the
-        # # callbacks will receive the server's initial messages. Otherwise connecting
-        # # has already happened during Client construction.
-        # try:
-        #     # Only call connect if the underlying WsClient hasn't connected yet
-        #     if (
-        #         not self.client.ws
-        #         or not self.client.ws.conn
-        #         or not self.client.ws.conn.connected
-        #     ):
-        #         # best-effort connect (WsClient.connect() is idempotent)
-        #         self.client.ws.connect()
-        # except Exception:
-        #     # ignore and proceed; connect may have already been started elsewhere
-        #     pass
-
-        # Initialization complete - reconnections will now happen normally
-        self._initializing = False
-
-        if self.slots:
-            print(f"Loaded {len(self.slots)} slots from server")
-            # Sort slots by position and normalize to clean grid
-            self.slots = self._sort_slots_by_position(self.slots)
-            self.reconnect_seamless()
-            self._normalize_positions()
-        else:
-            print("No slots loaded from server")
-
-        if reset_on_init:
-            self.client.reset()
-            self.reconnect()
-
-        print("Rig initialization complete")
-
+        self.client.ws.on(LoadingEnd, self._on_loading_end)
+        
     def __del__(self):
+        self.client.ws.off(LoadingStart, self._on_loading_start)
+        self.client.ws.off(AddHwPort, self._on_hw_port_added)
         self.client.ws.off(PluginAdd, self._on_plugin_added)
         self.client.ws.off(PluginRemove, self._on_plugin_removed)
         self.client.ws.off(PluginPos, self._on_position_change)
+        self.client.ws.off(LoadingEnd, self._on_loading_end)
 
-    def _resolve_hardware_ports(self) -> tuple[list[str], list[str]]:
-        """Resolve hardware ports from config or auto-detect from MOD-UI."""
-        hw_config = self.config.hardware
+    def _on_loading_start(self, event: LoadingStart):
+        self._loading = True
 
-        if hw_config.inputs is not None:
-            inputs = hw_config.inputs
+    def _on_loading_end(self, event: LoadingEnd):
+        self._loading = False
+
+    def _on_hw_port_added(self, event: AddHwPort):
+        if event.is_output:
+            slot: HardwareSlot = self.output_slot
         else:
-            inputs, _ = self.client.get_hardware_ports(timeout=5.0)
-            if not inputs:
-                print("⚠️ No hardware inputs detected, using defaults")
-                inputs = ["capture_1", "capture_2"]
+            slot: HardwareSlot = self.input_slot
+        if event.name not in slot._ports:
+            slot._ports.append(event.name)
 
-        if hw_config.outputs is not None:
-            outputs = hw_config.outputs
-        else:
-            _, outputs = self.client.get_hardware_ports(timeout=0.1)
-            if not outputs:
-                print("⚠️ No hardware outputs detected, using defaults")
-                outputs = ["playback_1", "playback_2"]
+        # TODO: resolve overrides (_resolve_hardware_ports)
 
-        print(f"Hardware ports: inputs={inputs}, outputs={outputs}")
-        return inputs, outputs
+    # def _resolve_hardware_ports(self) -> tuple[list[str], list[str]]:
+    #     """Resolve hardware ports from config or auto-detect from MOD-UI."""
+    #     hw_config = self.config.hardware
+
+    #     if hw_config.inputs is not None:
+    #         inputs = hw_config.inputs
+    #     else:
+    #         inputs, _ = self.client.get_hardware_ports(timeout=5.0)
+    #         if not inputs:
+    #             print("⚠️ No hardware inputs detected, using defaults")
+    #             inputs = ["capture_1", "capture_2"]
+
+    #     if hw_config.outputs is not None:
+    #         outputs = hw_config.outputs
+    #     else:
+    #         _, outputs = self.client.get_hardware_ports(timeout=0.1)
+    #         if not outputs:
+    #             print("⚠️ No hardware outputs detected, using defaults")
+    #             outputs = ["playback_1", "playback_2"]
+
+    #     print(f"Hardware ports: inputs={inputs}, outputs={outputs}")
+    #     return inputs, outputs
 
     def set_callbacks(
         self,
@@ -251,7 +241,7 @@ class Rig:
         slot.plugin.ui_y = event.y
 
         # Skip reordering during initialization
-        if self._initializing:
+        if self._loading:
             return
 
         # Reorder slots based on new positions and reconnect if order changed
@@ -359,57 +349,6 @@ class Rig:
         # Sort by (row, x)
         return sorted(slots, key=lambda s: (rows[s], s.plugin.ui_x or 0))
 
-    def _load_plugin_ports(
-        self, label: str, uri: str, effect_data: dict
-    ) -> tuple[list[Port], list[Port]]:
-        """Load and filter plugin ports from effect data.
-
-        Args:
-            label: Plugin label for graph paths
-            uri: Plugin URI for config lookup
-            effect_data: Data from effect_get API
-
-        Returns:
-            Tuple of (inputs, outputs) Port lists
-        """
-        # Parse all ports from effect data
-        all_inputs = []
-        all_outputs = []
-
-        ports = effect_data.get("ports", {})
-        audio_ports = ports.get("audio", {})
-
-        for p in audio_ports.get("input", []):
-            all_inputs.append(
-                Port(
-                    symbol=p["symbol"],
-                    name=p.get("name", p["symbol"]),
-                    graph_path=f"{label}/{p['symbol']}",
-                )
-            )
-        for p in audio_ports.get("output", []):
-            all_outputs.append(
-                Port(
-                    symbol=p["symbol"],
-                    name=p.get("name", p["symbol"]),
-                    graph_path=f"{label}/{p['symbol']}",
-                )
-            )
-
-        # Apply port overrides from config
-        plugin_config = self.config.get_plugin_by_uri(uri)
-        if plugin_config and plugin_config.inputs is not None:
-            inputs = [p for p in all_inputs if p.symbol in plugin_config.inputs]
-        else:
-            inputs = all_inputs
-
-        if plugin_config and plugin_config.outputs is not None:
-            outputs = [p for p in all_outputs if p.symbol in plugin_config.outputs]
-        else:
-            outputs = all_outputs
-
-        return inputs, outputs
-
     def _on_plugin_added(self, event: PluginAdd):
         """
         Handle plugin added via WebSocket feedback.
@@ -421,7 +360,7 @@ class Rig:
         if existing:
             print(f"Duplicate PluginAdd for {event.label}, ignoring")
 
-            # Duplicate WS event, ignore
+            # Duplicate WS event, оновлюємо координати якщо є
             if event.x is not None:
                 existing.plugin.ui_x = event.x
             if event.y is not None:
@@ -446,20 +385,19 @@ class Rig:
         slot.plugin.ui_x = event.x if event.x is not None else 0
         slot.plugin.ui_y = event.y if event.y is not None else 0
 
-        # Add slot and sort by position
+        # Додаємо слот
         self.slots.append(slot)
-        self.slots = self._sort_slots_by_position(self.slots)
+
         print(
             f"  Created slot: {slot} at index {self.slots.index(slot)} (pos: {event.x}, {event.y})"
         )
 
-        # Connect into chain UNLESS we're still initializing
-        if self._initializing:
-            print("  Skipping reconnect during initialization")
-        else:
-            self.reconnect_seamless()
-            # Normalize positions to fit the new plugin into the grid
+        # Сортуємо і нормалізуємо тільки після завантаження
+        self.slots = self._sort_slots_by_position(self.slots)
+        if not self._loading:
             self._normalize_positions()
+            # Connect into chain UNLESS we're still initializing
+            self.reconnect_seamless()
 
         # Сповіщуємо UI
         if self._ext_on_slot_added:
@@ -489,7 +427,7 @@ class Rig:
             break
 
         # Reconnect neighbors UNLESS we're still initializing
-        if not self._initializing:
+        if not self._loading:
             print(f"  Connecting neighbors: {src} -> {dst}")
             self._connect_pair(src, dst)
 
@@ -498,7 +436,7 @@ class Rig:
         print(f"  Removed slot: {event.label}")
 
         # Normalize remaining positions to fill the gap
-        if not self._initializing and self.slots:
+        if not self._loading and self.slots:
             self._normalize_positions()
 
         # Сповіщуємо UI

@@ -44,9 +44,12 @@ class AddHwPort:
 
 
 @dataclass(frozen=True)
-class HardwareReady:
-    inputs: list[str]
-    outputs: list[str]
+class LoadingStart:
+    pass
+
+@dataclass(frozen=True)
+class LoadingEnd:
+    pass
 
 
 # --------------------
@@ -94,7 +97,8 @@ class PluginRemove:
 # Union of all possible events
 WsEvent = (
     AddHwPort
-    | HardwareReady
+    | LoadingStart
+    | LoadingEnd
     | ParamSet
     | ParamSetBypass
     | PluginPos
@@ -126,8 +130,11 @@ class WsProtocol:
             if port_type == "audio" and port_path.startswith("/graph/"):
                 return AddHwPort(name=port_path[7:], is_output=is_graph_output)
 
+        if msg_type == "loading_start":
+            return LoadingStart()
+
         if msg_type == "loading_end":
-            return HardwareReady(inputs=[], outputs=[])
+            return LoadingEnd()
 
         # plugin_pos /graph/label x y
         if msg_type == "plugin_pos" and len(parts) >= 4:
