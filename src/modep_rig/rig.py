@@ -68,6 +68,14 @@ class Slot:
         label = path.split("/")[-1]
         return label.replace("#", "_").replace(" ", "_")
 
+    def __eq__(self, other):
+        if not isinstance(other, Slot):
+            return False
+        return self.label == other.label
+
+    def __hash__(self):
+        return hash(self.label)
+
     def __repr__(self):
         return f"Slot({self.label})"
 
@@ -401,7 +409,7 @@ class Rig:
         print(f"  Removed slot: {event.label}")
 
         # Normalize remaining positions to fill the gap
-        if not self._loading and self.slots:
+        if not self._loading:
             self._normalize_positions()
 
         # Notify UI
@@ -503,21 +511,17 @@ class Rig:
         # Pre-connect neighbors
         if src and dst:
             print(f"Pre-connecting neighbors before removal: {src} -> {dst}")
-            try:
-                self.client.effect_connect(src.outputs[0], dst.inputs[0])
-            except Exception:
-                print("  Pre-connect failed, will fallback if needed")
+            self._connect_pair(src, dst)
 
         # Attempt removal
         success = self.client.effect_remove(label)
         if not success:
             print(f"REST remove failed for {label}, doing seamless reconnect")
-            if src and dst:
-                self.reconnect_seamless()
-            return False
+        else:
+            print(f"REST OK: Requested remove {label}, waiting for WS feedback")
 
-        print(f"REST OK: Requested remove {label}, waiting for WS feedback")
-        return True
+        self.reconnect_seamless()
+        return success
 
     def move_slot(self, from_idx: int, to_idx: int):
         """
