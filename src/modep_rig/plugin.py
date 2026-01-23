@@ -13,6 +13,7 @@ from typing import Any, Iterator
 from pytest import Config
 
 from modep_rig.client import ParamSetBypass, Client, ParamSet, PluginPos
+from modep_rig.config import PluginConfig
 from modep_rig.controls import ControlPort, parse_control_ports
 
 
@@ -156,7 +157,11 @@ class Plugin:
         ports = effect_data.get("ports", {})
         audio_ports = ports.get("audio", {})
 
+        plugin_config: PluginConfig = config.get_plugin_by_uri(uri)
+
         for p in audio_ports.get("input", []):
+            if p["symbol"] in plugin_config.disable_ports:
+                continue
             all_inputs.append(
                 Port(
                     symbol=p["symbol"],
@@ -165,6 +170,8 @@ class Plugin:
                 )
             )
         for p in audio_ports.get("output", []):
+            if p["symbol"] in plugin_config.disable_ports:
+                continue
             all_outputs.append(
                 Port(
                     symbol=p["symbol"],
@@ -173,19 +180,8 @@ class Plugin:
                 )
             )
 
-        # Apply port overrides from config
-        plugin_config = config.get_plugin_by_uri(uri)
-        if plugin_config and plugin_config.inputs is not None:
-            inputs = [p for p in all_inputs if p.symbol in plugin_config.inputs]
-        else:
-            inputs = all_inputs
-
-        if plugin_config and plugin_config.outputs is not None:
-            outputs = [p for p in all_outputs if p.symbol in plugin_config.outputs]
-        else:
-            outputs = all_outputs
-
-        return inputs, outputs
+        print(all_inputs)
+        return all_inputs, all_outputs
 
     def _load_controls(self, effect_data: dict[str, Any]) -> None:
         """Load control metadata from effect_get response."""

@@ -22,8 +22,7 @@ class PluginConfig:
     uri: str
     category: str = ""
     # Опціональні override для портів (для моно/стерео конверсії)
-    inputs: list[str] | None = None
-    outputs: list[str] | None = None
+    disable_ports: list[str] = field(default_factory=list)
     # Явний режим каналів: "mono", "stereo", або None (авто)
     mode: str | None = None
     # All-to-all routing: з'єднати всі входи/виходи між собою
@@ -90,8 +89,7 @@ class Config:
                     name=p["name"],
                     uri=p["uri"],
                     category=p.get("category", ""),
-                    inputs=p.get("inputs"),
-                    outputs=p.get("outputs"),
+                    disable_ports=p.get("disable_ports", []),
                     mode=p.get("mode"),
                     join_inputs=p.get("join_inputs", False),
                     join_outputs=p.get("join_outputs", False),

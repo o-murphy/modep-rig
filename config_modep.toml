@@ -83,6 +83,7 @@ category = "distortion"
 name = "Bollie Delay"
 uri = "https://ca9.eu/lv2/bolliedelay"
 category = "delay"
+# disable_ports = ["in_l"]
 
 [[plugins]]
 name = "Gxduck_delay"
@@ -381,7 +382,7 @@ name = "AIDA-X"
 uri = "http://aidadsp.cc/plugins/aidadsp-bundle/rt-neural-generic"
 category = "simulator"
 
-# --- SPAYIAL ---
+# --- SPATIAL ---
 
 [[plugins]]
 name = "Ping Pong Pan"
@@ -389,8 +390,7 @@ uri = "http://distrho.sf.net/plugins/PingPongPan"
 category = "spatial"
 
 # NOTE: use it to override inputs
-# inputs = ["lv2_audio_in_1"]
-# outputs = ["lv2_audio_out_1"]
+# disable_inputs = ["lv2_audio_in_1", "lv2_audio_out_1"]
 # join_inputs = true
 
 # --- FILTER ---
