@@ -3,8 +3,8 @@ from typing import Callable, SupportsIndex
 import secrets
 import string
 
-from modep_rig.config import Config, PluginConfig
-from modep_rig.client import (
+from mod_rack.config import Config, PluginConfig
+from mod_rack.client import (
     AddHwPort,
     Client,
     LoadingEnd,
@@ -13,7 +13,7 @@ from modep_rig.client import (
     PluginPos,
     PluginRemove,
 )
-from modep_rig.plugin import Plugin, Port
+from mod_rack.plugin import Plugin
 
 
 # Type aliases for callbacks
@@ -22,7 +22,7 @@ OnSlotRemovedCallback = Callable[[str], None]  # label
 OnOrderChangeCallback = Callable[[list[str]], None]  # order (list of labels)
 
 
-__all__ = ["Slot", "HardwareSlot", "Rig"]
+__all__ = ["Slot", "HardwareSlot", "Rack"]
 
 
 # =============================================================================
@@ -111,7 +111,7 @@ class HardwareSlot:
 # =============================================================================
 
 
-class Rig:
+class Rack:
     """
     Rig — ланцюг ефектів: Input -> [Slot 0] -> [Slot 1] -> ... -> Output
 

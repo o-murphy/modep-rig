@@ -16,7 +16,7 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0",
 }
 
-# WebSocket message types that indicate structural changes (require rig reset)
+# WebSocket message types that indicate structural changes (require rack reset)
 STRUCTURAL_MESSAGES = frozenset(
     [
         "add",  # Plugin added

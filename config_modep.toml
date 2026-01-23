@@ -11,7 +11,7 @@ url = "http://192.168.88.247:80/"
 # All-to-all routing: connect all last plugin outputs to all hardware outputs
 # join_outputs = true
 
-[rig]
+[rack]
 slot_count = 4
 
 # =============================================================================

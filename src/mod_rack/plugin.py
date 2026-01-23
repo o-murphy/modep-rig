@@ -12,9 +12,9 @@ from typing import Any, Iterator
 
 from pytest import Config
 
-from modep_rig.client import ParamSetBypass, Client, ParamSet, PluginPos
-from modep_rig.config import PluginConfig
-from modep_rig.controls import ControlPort, parse_control_ports
+from mod_rack.client import ParamSetBypass, Client, ParamSet, PluginPos
+from mod_rack.config import PluginConfig
+from mod_rack.controls import ControlPort, parse_control_ports
 
 
 __all__ = ["Port", "Plugin"]

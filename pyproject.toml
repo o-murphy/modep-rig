@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "modep-rig"
+name = "mod-rack"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-modep-qrig = "modep_rig.qrig:main"
+mod-qrack = "mod_rack.qrack:main"
 
 [dependency-groups]
 dev = [

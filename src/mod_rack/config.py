@@ -11,7 +11,7 @@ __all__ = [
     "PluginConfig",
     "HardwareConfig",
     "ServerConfig",
-    "RigConfig",
+    "RackConfig",
     "Config",
 ]
 
@@ -45,7 +45,7 @@ class ServerConfig:
 
 
 @dataclass
-class RigConfig:
+class RackConfig:
     # Maximum number of slots allowed (None = unlimited)
     slots_limit: int | None = None
 
@@ -54,7 +54,7 @@ class RigConfig:
 class Config:
     server: ServerConfig = field(default_factory=ServerConfig)
     hardware: HardwareConfig = field(default_factory=HardwareConfig)
-    rig: RigConfig = field(default_factory=RigConfig)
+    rack: RackConfig = field(default_factory=RackConfig)
     plugins: list[PluginConfig] = field(default_factory=list)
 
     @classmethod
@@ -76,10 +76,10 @@ class Config:
             join_inputs=hw_data.get("join_inputs", False),
             join_outputs=hw_data.get("join_outputs", False),
         )
-        rig_data = data.get("rig", {})
-        rig = RigConfig(
-            slots_limit=rig_data.get("slots_limit")
-            or rig_data.get("slot_count"),  # backward compat
+        rack_data = data.get("rack", {})
+        rack = RackConfig(
+            slots_limit=rack_data.get("slots_limit")
+            or rack_data.get("slot_count"),  # backward compat
         )
 
         plugins = []
@@ -99,7 +99,7 @@ class Config:
         return cls(
             server=server,
             hardware=hardware,
-            rig=rig,
+            rack=rack,
             plugins=plugins,
         )
 

@@ -2,7 +2,7 @@
 
 ## What Was Implemented
 
-Full "make-before-break" (seamless plugin switching without audio interruption) for modep-rig.
+Full "make-before-break" (seamless plugin switching without audio interruption) for mod-rack.
 
 ## Key Principle
 
@@ -24,7 +24,7 @@ RIGHT:  connect new → disconnect old (audio continues!)
 2. **`Slot.replace(uri)`** - Replace plugin (make-before-break) ✨ NEW
    - Saves old plugin label
    - Loads new plugin via `_load_internal()` (doesn't remove old)
-   - Connects new via `rig._reconnect_slot()`
+   - Connects new via `rack._reconnect_slot()`
    - Removes old plugin only after new is connected
    - Automatic rollback on failure
 
@@ -40,19 +40,19 @@ RIGHT:  connect new → disconnect old (audio continues!)
    - Does NOT remove previous plugin
    - Used only by `replace()`
 
-### Rig Class
+### Rack Class
 
-1. **`Rig.__setitem__(idx, value)`** - Smart slot assignment ✨ MODIFIED
+1. **`Rack.__setitem__(idx, value)`** - Smart slot assignment ✨ MODIFIED
    - If replacing: uses `Slot.replace()`
    - If loading into empty: uses `Slot.load()` + `_reconnect_slot()`
    - If unloading: uses `Slot.unload()`
    - Never calls full `reconnect()`
 
-2. **`Rig.remove_slot(slot)`** - Remove slot ✨ MODIFIED
+2. **`Rack.remove_slot(slot)`** - Remove slot ✨ MODIFIED
    - Now uses `Slot.unload()` (make-before-break)
    - No more direct `_unload_internal()` + `reconnect()`
 
-3. **`Rig._reconnect_slot(slot)`** - Partial reconnect ✨ NEW
+3. **`Rack._reconnect_slot(slot)`** - Partial reconnect ✨ NEW
    - **CRITICAL:** Implements make-before-break order:
      1. Find source (prev slot or input)
      2. Find destination (next slot or output)
@@ -60,19 +60,19 @@ RIGHT:  connect new → disconnect old (audio continues!)
      4. **THEN disconnect old path** (src → dst removed)
    - Decorated with `@suppress_structural` to prevent cascading events
 
-4. **`Rig._disconnect_slot_connections(slot)`** - Safe disconnect ✨ NEW
+4. **`Rack._disconnect_slot_connections(slot)`** - Safe disconnect ✨ NEW
    - Disconnects all I/O ports of a slot
    - Tries all combinations (ignores errors)
 
-5. **`Rig._disconnect_pair(src, dst)`** - Specific route disconnect ✨ NEW
+5. **`Rack._disconnect_pair(src, dst)`** - Specific route disconnect ✨ NEW
    - Disconnects specific source → destination
    - Handles both regular and hardware slots
    - Used by `_reconnect_slot()` to remove old path
 
-### UI (rig_ui.py)
+### UI (qrack.py)
 
 1. **`_on_add_slot()`** ✨ MODIFIED
-   - Changed from `self.rig.reconnect()` to `self.rig._reconnect_slot(slot)`
+   - Changed from `self.rack.reconnect()` to `self.rack._reconnect_slot(slot)`
    - No more full board rebuild when adding slot
 
 ## Flow Examples
@@ -116,8 +116,8 @@ Before: Input → DS1[0] → Reverb[1] → Delay[2] → Output
 - **Backward Compatible:** Old API still works, but uses new internals
 
 ## Files Modified
-- `src/modep_rig/rig.py` - Core implementation
-- `rig_ui.py` - UI integration
+- `src/mod_rack/rack.py` - Core implementation
+- `qrack.py` - UI integration
 - `MAKE_BEFORE_BREAK.md` - Documentation
 - `CHANGES_RIG_UI_FIX.md` - Change log
 - `todo.md` - Progress tracking

@@ -1,15 +1,15 @@
 """
-PySide6 UI for MODEP Rig control.
+PySide6 UI for MODEP Rack control.
 
-Run with: python rig_ui.py
+Run with: python qrack.py
 """
 
 import signal
 import sys
 from pathlib import Path
 
-from modep_rig.client import ParamSetBypass, ParamSet
-from modep_rig.plugin import Plugin
+from mod_rack.client import ParamSetBypass, ParamSet
+from mod_rack.plugin import Plugin
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
@@ -37,12 +37,12 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal, QTimer, QObject
 
-from modep_rig import Config, Rig, ControlPort
-from modep_rig.rig import Slot
+from mod_rack import Config, Rack, ControlPort
+from mod_rack.rack import Slot
 
 
-class RigSignals(QObject):
-    """Qt signals for Rig WebSocket events."""
+class RackSignals(QObject):
+    """Qt signals for Rack WebSocket events."""
 
     slot_added = Signal(object)  # slot
     slot_removed = Signal(str)  # label
@@ -241,7 +241,7 @@ def create_control_widget(control: ControlPort, parent=None) -> ControlWidget:
 class PluginSelectorDialog(QDialog):
     """Dialog to select a plugin from available effects."""
 
-    def __init__(self, rig: Rig, parent=None):
+    def __init__(self, rack: Rack, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Select Plugin")
         self.setMinimumSize(400, 500)
@@ -253,7 +253,7 @@ class PluginSelectorDialog(QDialog):
         # Plugin list - show only whitelisted plugins
         self.list_widget = QListWidget()
 
-        for p_config in rig.config.plugins:
+        for p_config in rack.config.plugins:
             name = p_config.name
             uri = p_config.uri
             category = p_config.category or "General"
@@ -283,7 +283,7 @@ class PluginSelectorDialog(QDialog):
 
 
 class SlotWidget(QFrame):
-    """Widget representing a single slot in the rig."""
+    """Widget representing a single slot in the rack."""
 
     clicked = Signal(str)  # label
     remove_requested = Signal(str)  # label
@@ -540,28 +540,28 @@ class ControlsPanel(QScrollArea):
 class MainWindow(QMainWindow):
     """Main application window."""
 
-    def __init__(self, rig: Rig):
+    def __init__(self, rack: Rack):
         super().__init__()
-        self.rig = rig
+        self.rack = rack
         self.selected_label: str | None = None
 
         # Setup signals for thread-safe UI updates
-        self.rig_signals = RigSignals()
-        self.rig_signals.slot_added.connect(self._on_ws_slot_added)
-        self.rig_signals.slot_removed.connect(self._on_ws_slot_removed)
-        self.rig_signals.order_changed.connect(self._on_ws_order_changed)
+        self.rack_signals = RackSignals()
+        self.rack_signals.slot_added.connect(self._on_ws_slot_added)
+        self.rack_signals.slot_removed.connect(self._on_ws_slot_removed)
+        self.rack_signals.order_changed.connect(self._on_ws_order_changed)
 
-        self.rig.client.ws.on(ParamSetBypass, self._on_ws_bypass_changed)
-        self.rig.client.ws.on(ParamSet, self._on_ws_param_changed)
+        self.rack.client.ws.on(ParamSetBypass, self._on_ws_bypass_changed)
+        self.rack.client.ws.on(ParamSet, self._on_ws_param_changed)
 
-        # Connect rig callbacks to emit signals
-        self.rig.set_callbacks(
-            on_slot_added=lambda slot: self.rig_signals.slot_added.emit(slot),
-            on_slot_removed=lambda label: self.rig_signals.slot_removed.emit(label),
-            on_order_change=lambda order: self.rig_signals.order_changed.emit(order),
+        # Connect rack callbacks to emit signals
+        self.rack.set_callbacks(
+            on_slot_added=lambda slot: self.rack_signals.slot_added.emit(slot),
+            on_slot_removed=lambda label: self.rack_signals.slot_removed.emit(label),
+            on_order_change=lambda order: self.rack_signals.order_changed.emit(order),
         )
 
-        self.setWindowTitle("MODEP Rig Controller")
+        self.setWindowTitle("MODEP Rack Controller")
         self.setMinimumSize(800, 600)
 
         # Central widget
@@ -595,7 +595,7 @@ class MainWindow(QMainWindow):
 
         main_layout.addLayout(self.left_panel)
 
-        # Right side - controls panel
+        # Rackht side - controls panel
         self.controls_panel = ControlsPanel()
         self.controls_panel.setMinimumWidth(500)
         main_layout.addWidget(self.controls_panel, stretch=1)
@@ -604,11 +604,11 @@ class MainWindow(QMainWindow):
         self._rebuild_slot_widgets()
 
     def __del__(self):
-        self.rig.client.ws.off(ParamSetBypass, self._on_ws_bypass_changed)
-        self.rig.client.ws.off(ParamSet, self._on_ws_param_changed)
+        self.rack.client.ws.off(ParamSetBypass, self._on_ws_bypass_changed)
+        self.rack.client.ws.off(ParamSet, self._on_ws_param_changed)
 
     def _rebuild_slot_widgets(self):
-        """Rebuild all slot widgets from rig state."""
+        """Rebuild all slot widgets from rack state."""
         # Clear existing widgets
         for widget in self.slot_widgets:
             widget.deleteLater()
@@ -621,7 +621,7 @@ class MainWindow(QMainWindow):
                 item.widget().deleteLater()
 
         # Create new widgets for each slot
-        for i, slot in enumerate(self.rig.slots):
+        for i, slot in enumerate(self.rack.slots):
             plugin_name = slot.plugin.name
             slot_widget = SlotWidget(slot.label, i, plugin_name)
             slot_widget.clicked.connect(self._on_slot_clicked)
@@ -632,10 +632,10 @@ class MainWindow(QMainWindow):
             self.slots_container.addWidget(slot_widget)
 
         # Update selection
-        if self.selected_label and self.rig.get_slot_by_label(self.selected_label):
+        if self.selected_label and self.rack.get_slot_by_label(self.selected_label):
             self._select_slot(self.selected_label)
-        elif self.rig.slots:
-            self._select_slot(self.rig.slots[0].label)
+        elif self.rack.slots:
+            self._select_slot(self.rack.slots[0].label)
         else:
             self.selected_label = None
             self.controls_panel.set_plugin(None)
@@ -647,7 +647,7 @@ class MainWindow(QMainWindow):
         for sw in self.slot_widgets:
             sw.set_selected(sw.slot_label_id == label)
 
-        slot = self.rig.get_slot_by_label(label)
+        slot = self.rack.get_slot_by_label(label)
         if slot:
             self.controls_panel.set_plugin(slot.plugin, label)
         else:
@@ -659,9 +659,9 @@ class MainWindow(QMainWindow):
 
     def _on_add_plugin(self):
         """Add a new plugin (request via REST, wait for WS feedback)."""
-        dialog = PluginSelectorDialog(self.rig, self)
+        dialog = PluginSelectorDialog(self.rack, self)
         if dialog.exec() == QDialog.Accepted and dialog.selected_uri:
-            label = self.rig.request_add_plugin(dialog.selected_uri)
+            label = self.rack.request_add_plugin(dialog.selected_uri)
             if label:
                 print(f"Requested add plugin, label={label}")
             else:
@@ -669,7 +669,7 @@ class MainWindow(QMainWindow):
 
     def _on_remove_plugin(self, label: str):
         """Remove plugin (request via REST, wait for WS feedback)."""
-        success = self.rig.request_remove_plugin(label)
+        success = self.rack.request_remove_plugin(label)
         if success:
             print(f"Requested remove plugin {label}")
         else:
@@ -677,40 +677,40 @@ class MainWindow(QMainWindow):
 
     def _on_replace_plugin(self, label: str):
         """Replace plugin - remove old, add new."""
-        dialog = PluginSelectorDialog(self.rig, self)
+        dialog = PluginSelectorDialog(self.rack, self)
         if dialog.exec() == QDialog.Accepted and dialog.selected_uri:
             # Preserve slot index: remove old, then request add at same index
-            slot = self.rig.get_slot_by_label(label)
-            insert_idx = self.rig.slots.index(slot) if slot else None
+            slot = self.rack.get_slot_by_label(label)
+            insert_idx = self.rack.slots.index(slot) if slot else None
             # Request remove first
-            self.rig.request_remove_plugin(label)
+            self.rack.request_remove_plugin(label)
             # Request add at the same index (will be moved when WS feedback arrives)
             if insert_idx is not None:
-                self.rig.request_add_plugin_at(dialog.selected_uri, insert_idx)
+                self.rack.request_add_plugin_at(dialog.selected_uri, insert_idx)
             else:
-                self.rig.request_add_plugin(dialog.selected_uri)
+                self.rack.request_add_plugin(dialog.selected_uri)
 
             return
 
     def _on_clear_all(self):
         """Clear all plugins."""
-        self.rig.clear()
+        self.rack.clear()
         # Immediately update UI to reflect cleared state
         self._rebuild_slot_widgets()
 
     def _on_slot_dropped(self, src_label: str, dest_index: int):
         """Handle drag-and-drop reorder: move src slot to dest index."""
         print(f"ON_SLOT_DROPPED: src_label={src_label} dest_index={dest_index}")
-        src_slot = self.rig.get_slot_by_label(src_label)
+        src_slot = self.rack.get_slot_by_label(src_label)
         if not src_slot:
             return
-        from_idx = self.rig.slots.index(src_slot)
+        from_idx = self.rack.slots.index(src_slot)
         to_idx = dest_index
         print(f"ON_SLOT_DROPPED: from_idx={from_idx} to_idx={to_idx}")
         if from_idx == to_idx:
             return
-        # Use rig.move_slot which handles reconnect
-        self.rig.move_slot(from_idx, to_idx)
+        # Use rack.move_slot which handles reconnect
+        self.rack.move_slot(from_idx, to_idx)
         # Rebuild UI to reflect new order and keep selection on moved slot
         self._rebuild_slot_widgets()
         self._select_slot(src_label)
@@ -753,8 +753,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Called when user closes window."""
-        print("Closing rig connection...")
-        # self.rig.clear()
+        print("Closing rack connection...")
         event.accept()
 
 
@@ -764,7 +763,7 @@ def main():
     # Override server URL if needed
     import argparse
 
-    parser = argparse.ArgumentParser(description="MODEP Rig Controller")
+    parser = argparse.ArgumentParser(description="MODEP Rack Controller")
     parser.add_argument("--server", "-s", default=None, help="MOD server URL")
     parser.add_argument(
         "--config", "-c", help="Config", type=Path, default="config.toml"
@@ -779,9 +778,9 @@ def main():
     if args.server:
         config.server.url = args.server
 
-    # Create rig (do not force reset on init — build state from WebSocket)
+    # Create rack (do not force reset on init — build state from WebSocket)
     print("Connecting to MOD server...")
-    rig = Rig(config, prevent_normalization=not args.master)
+    rack = Rack(config, prevent_normalization=not args.master)
 
     # Create and run app
     app = QApplication(sys.argv)
@@ -789,7 +788,7 @@ def main():
     # Handle Ctrl+C
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
-    window = MainWindow(rig)
+    window = MainWindow(rack)
     if args.master:
         window.setWindowTitle(window.windowTitle() + " (MASTER)")
     window.show()
