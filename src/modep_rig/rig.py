@@ -121,7 +121,7 @@ class Rig:
     - WS handlers: _on_plugin_added(), _on_plugin_removed()
     """
 
-    def __init__(self, config: Config, client: Client | None = None):
+    def __init__(self, config: Config, client: Client | None = None, prevent_normalization = False):
         self.config = config
         # If caller did not provide a Client, create one but delay WebSocket
         # connection until after callbacks are installed to avoid missing messages.
@@ -129,6 +129,8 @@ class Rig:
             self.client = Client(config.server.url)
         else:
             self.client = client
+
+        self._prevent_normalization = prevent_normalization
 
         self.input_slot = HardwareSlot(ports=[], is_input=True)
         self.output_slot = HardwareSlot(ports=[], is_input=False)
@@ -282,6 +284,9 @@ class Rig:
             base_y: Y coordinate for first row
             max_per_row: Maximum plugins per row (default 5)
         """
+        if self._prevent_normalization:
+            return
+        
         if not self.slots:
             return
 

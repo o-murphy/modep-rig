@@ -769,6 +769,9 @@ def main():
     parser.add_argument(
         "--config", "-c", help="Config", type=Path, default="config.toml"
     )
+    parser.add_argument(
+        "--master", "-m", help="Master", action="store_true"
+    )
     args = parser.parse_args()
 
     config = Config.load(args.config)
@@ -778,7 +781,7 @@ def main():
 
     # Create rig (do not force reset on init — build state from WebSocket)
     print("Connecting to MOD server...")
-    rig = Rig(config)
+    rig = Rig(config, prevent_normalization=not args.master)
 
     # Create and run app
     app = QApplication(sys.argv)
@@ -787,6 +790,8 @@ def main():
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
     window = MainWindow(rig)
+    if args.master:
+        window.setWindowTitle(window.windowTitle() + " (MASTER)")
     window.show()
 
     # Timer for Ctrl+C on Linux/Windows
