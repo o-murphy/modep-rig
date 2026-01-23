@@ -83,6 +83,7 @@ class LoadingEndEvent:
 @dataclass(frozen=True)
 class GraphConnectEvent:
     """connect /graph/gx_duck_delay__ND258bdR/out /graph/gx_fuzz__4e4UwTyJ/in"""
+
     src_path: str
     dst_path: str
 
@@ -90,6 +91,7 @@ class GraphConnectEvent:
 @dataclass(frozen=True)
 class GraphDisconnectEvent:
     """disconnect /graph/gx_duck_delay__ND258bdR/out /graph/gx_fuzz__4e4UwTyJ/in"""
+
     src_path: str
     dst_path: str
 
@@ -167,23 +169,23 @@ class WsProtocol:
         match parts:
             case ["ping", *_]:
                 return PingEvent()
-            
+
             case ["stats", _a, _b, *_]:
                 try:
                     return StatsEvent(float(_a), int(_b))
                 except ValueError:
                     pass
-            
+
             case ["sys_stats", _a, _b, _c, *_]:
                 try:
                     return SysStatsEvent(float(_a), int(_b), int(_c))
                 except ValueError:
                     pass
-            
+
             case ["loading_start", *_]:
                 # received 2 values like (1, 1) but we ignoring it
                 return LoadingStartEvent()
-            
+
             case ["loading_end", *_]:
                 # received 2 values like (0, 0) but we ignoring it
                 return LoadingEndEvent()
@@ -221,7 +223,9 @@ class WsProtocol:
                 return GraphPluginRemoveEvent(inst.removeprefix(prefix))
 
             case ["connect" | "disconnect" as action, src, dst, *_]:
-                event_cls = GraphConnectEvent if action == "connect" else GraphDisconnectEvent
+                event_cls = (
+                    GraphConnectEvent if action == "connect" else GraphDisconnectEvent
+                )
                 return event_cls(
                     src.removeprefix(prefix),
                     dst.removeprefix(prefix),

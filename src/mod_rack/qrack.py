@@ -768,9 +768,7 @@ def main():
     parser.add_argument(
         "--config", "-c", help="Config", type=Path, default="config.toml"
     )
-    parser.add_argument(
-        "--master", "-m", help="Master", action="store_true"
-    )
+    parser.add_argument("--master", "-m", help="Master", action="store_true")
     args = parser.parse_args()
 
     config = Config.load(args.config)

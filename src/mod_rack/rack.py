@@ -693,7 +693,7 @@ class Rack:
             if not to_connect and not to_disconnect:
                 return  # Нічого не змінилося
 
-            print(f"--- Syncing Graph ---")
+            print("--- Syncing Graph ---")
             for out_p, in_p in to_connect:
                 print(f"  [+] Connecting: {out_p} -> {in_p}")
                 self.client.effect_connect(out_p, in_p)
