@@ -12,7 +12,7 @@ from typing import Any, Iterator
 
 from pytest import Config
 
-from mod_rack.client import GraphParamSetBypassEvent, Client, GraphParamSetEvent, GraphPluginPosEvent
+from mod_rack.client import GraphParamSetBypassEvent, Client, GraphParamSetEvent
 from mod_rack.config import PluginConfig
 from mod_rack.controls import ControlPort, parse_control_ports
 

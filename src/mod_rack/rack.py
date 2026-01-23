@@ -41,7 +41,7 @@ class PluginSlot:
     Slot ідентифікується по label плагіна.
     """
 
-    def __init__(self, plugin: Plugin):
+    def __init__(self, plugin: Plugin, pos_x: int = 0, pos_y: int = 0):
         """
         Створює слот з плагіном.
 
@@ -50,8 +50,8 @@ class PluginSlot:
             plugin: Плагін (обов'язковий)
         """
         self.plugin = plugin
-        self.ui_x: int = 0
-        self.ui_y: int = 0
+        self.pos_x: int = pos_x
+        self.pos_y: int = pos_y
 
     @property
     def label(self) -> str:
@@ -260,8 +260,8 @@ class Rack:
             return
 
         # NOTE: we should ensure that plugin already got an update
-        slot.ui_x = event.x
-        slot.ui_y = event.y
+        slot.pos_x = event.x
+        slot.pos_y = event.y
 
         # Skip reordering during initialization
         if self._loading:
@@ -327,13 +327,13 @@ class Rack:
                 new_x = base_x + col * x_step
                 new_y = base_y + row * y_step
 
-                old_x = slot.ui_x
-                old_y = slot.ui_y
+                old_x = slot.pos_x
+                old_y = slot.pos_y
 
                 # Only update if position actually changed significantly
                 if abs(new_x - old_x) > 10 or abs(new_y - old_y) > 10:
-                    slot.ui_x = new_x
-                    slot.ui_y = new_y
+                    slot.pos_x = new_x
+                    slot.pos_y = new_y
                     self.client.effect_position(slot.label, new_x, new_y)
                     print(f"    {slot.label}: ({old_x}, {old_y}) -> ({new_x}, {new_y})")
         finally:
@@ -359,7 +359,7 @@ class Rack:
             return []
 
         # Sort by Y first to find clusters
-        sorted_by_y = sorted(slots, key=lambda s: s.ui_y or 0)
+        sorted_by_y = sorted(slots, key=lambda s: s.pos_y or 0)
 
         # Assign row numbers based on Y-clustering
         rows: dict[PluginSlot, int] = {}
@@ -367,14 +367,14 @@ class Rack:
         prev_y: float | None = None
 
         for slot in sorted_by_y:
-            y = slot.ui_y or 0
+            y = slot.pos_y or 0
             if prev_y is not None and (y - prev_y) > y_threshold:
                 current_row += 1
             rows[slot] = current_row
             prev_y = y
 
         # Sort by (row, x)
-        return sorted(slots, key=lambda s: (rows[s], s.ui_x or 0))
+        return sorted(slots, key=lambda s: (rows[s], s.pos_x or 0))
 
     def _on_graph_plugin_add(self, event: GraphPluginAddEvent):
         """
@@ -383,11 +383,9 @@ class Rack:
         Creates Slot, fetches port info, connects to chain.
         """
         # Перевіряємо чи такий слот вже існує
-        existing = self._find_slot_by_label(event.label)
-        if existing:
+        slot = self._find_slot_by_label(event.label)
+        if not slot:
             # Just update position
-            slot = existing
-        else:
             plugin = Plugin.load_supported(
                 self.client,
                 uri=event.uri,
@@ -400,8 +398,13 @@ class Rack:
                 return
 
             # Створюємо слот
-            slot = PluginSlot(plugin)
+            slot = PluginSlot(
+                plugin,
+                event.x if event.x is not None else 0,
+                event.y if event.y is not None else 0,
+            )
 
+        with self._lock:
             # Додаємо слот
             self.slots.append(slot)
 
@@ -409,22 +412,18 @@ class Rack:
                 f"  Created slot: {slot} at index {self.slots.index(slot)} (pos: {event.x}, {event.y})"
             )
 
+            # Сортуємо
+            self.slots = self._sort_slots_by_position(self.slots)
+
             # Сповіщуємо UI
             if self._ext_on_slot_added:
                 self._ext_on_slot_added(slot)
 
-        # Store UI position on plugin
-        slot.ui_x = event.x if event.x is not None else 0
-        slot.ui_y = event.y if event.y is not None else 0
-
-        # Сортуємо
-        self.slots = self._sort_slots_by_position(self.slots)
-
-        # Нормалізуємо тільки після завантаження
-        if not self._loading:
-            self._normalize_positions()
-            # Connect into chain UNLESS we're still initializing
-            self.reconnect_seamless()
+            # Нормалізуємо тільки після завантаження
+            if not self._loading:
+                self._normalize_positions()
+                # Connect into chain UNLESS we're still initializing
+                self.reconnect_seamless()
 
     def _on_graph_plugin_remove(self, event: GraphPluginRemoveEvent):
         """
@@ -441,15 +440,18 @@ class Rack:
             # 1. Очищуємо кеш з'єднань від усіх портів цього плагіна
             # Шукаємо з'єднання, де шлях починається з /graph/label/
             prefix = f"{event.label}/"
-            
+
             to_remove = {
-                pair for pair in self._connections 
+                pair
+                for pair in self._connections
                 if pair[0].startswith(prefix) or pair[1].startswith(prefix)
             }
-            
+
             for pair in to_remove:
                 self._connections.discard(pair)
-                print(f"  [Cache Cleanup] Removed stale connection: {pair[0]} -> {pair[1]}")
+                print(
+                    f"  [Cache Cleanup] Removed stale connection: {pair[0]} -> {pair[1]}"
+                )
 
             # 2. Видаляємо сам слот
             self.slots.remove(slot)
@@ -568,7 +570,6 @@ class Rack:
         else:
             print(f"REST OK: Requested remove {label}, waiting for WS feedback")
 
-        self.reconnect_seamless()
         return success
 
     def move_slot(self, from_idx: int, to_idx: int):
@@ -632,24 +633,24 @@ class Rack:
         if target_idx <= 0:
             # Insert before first slot
             first = sorted_slots[0]
-            first_x = first.ui_x or 200
-            first_y = first.ui_y or 400
+            first_x = first.pos_x or 200
+            first_y = first.pos_y or 400
             return (first_x - x_step, first_y)
 
         if target_idx >= len(sorted_slots):
             # Insert after last slot
             last = sorted_slots[-1]
-            last_x = last.ui_x or 200
-            last_y = last.ui_y or 400
+            last_x = last.pos_x or 200
+            last_y = last.pos_y or 400
             return (last_x + x_step, last_y)
 
         # Insert between two slots
         prev_slot = sorted_slots[target_idx - 1]
         next_slot = sorted_slots[target_idx]
 
-        prev_x = prev_slot.ui_x or 0
-        prev_y = prev_slot.ui_y or 400
-        next_x = next_slot.ui_x or 0
+        prev_x = prev_slot.pos_x or 0
+        prev_y = prev_slot.pos_y or 400
+        next_x = next_slot.pos_x or 0
 
         # Position between prev and next
         new_x = (prev_x + next_x) / 2
@@ -674,56 +675,32 @@ class Rack:
         print("=== RECONNECT DONE ===\n")
 
     def reconnect_seamless(self):
-        """Rebuild all connections using make-before-break (no audio gap).
+        if self._loading:
+            return
 
-        1. Calculate desired connections for new chain
-        2. Connect all new connections first
-        3. Disconnect only connections that are no longer needed
-        """
-        print("\n=== RECONNECT SEAMLESS ===")
+        with self._lock:
+            chain = [self.input_slot] + self.slots + [self.output_slot]
 
-        chain = [self.input_slot] + self.slots + [self.output_slot]
-        print(f"Chain: {' -> '.join(repr(s) for s in chain)}")
+            desired = set()
+            for i in range(len(chain) - 1):
+                desired.update(self._get_connection_pairs(chain[i], chain[i + 1]))
 
-        # Calculate desired connections
-        desired_connections: set[tuple[str, str]] = set()
-        for i in range(len(chain) - 1):
-            pairs = self._get_connection_pairs(chain[i], chain[i + 1])
-            desired_connections.update(pairs)
+            # Ключовий момент: to_connect — це те, чого реально немає в кеші
+            to_connect = desired - self._connections
+            # to_disconnect — це те, що є в кеші, але більше не потрібно
+            to_disconnect = self._connections - desired
 
-        print(f"  Desired connections: {len(desired_connections)}")
+            if not to_connect and not to_disconnect:
+                return  # Нічого не змінилося
 
-        # Calculate all possible connections (current state unknown, so we consider all)
-        all_possible: set[tuple[str, str]] = set()
-        all_ports = []
-        all_ports.extend(self.input_slot.outputs)
-        all_ports.extend(self.output_slot.inputs)
-        all_ports.extend(self.config.hardware.disable_ports)
-        for slot in self.slots:
-            all_ports.extend(slot.outputs)
-            all_ports.extend(slot.inputs)
-        for out in all_ports:
-            for inp in all_ports:
-                all_possible.add((out, inp))
+            print(f"--- Syncing Graph ---")
+            for out_p, in_p in to_connect:
+                print(f"  [+] Connecting: {out_p} -> {in_p}")
+                self.client.effect_connect(out_p, in_p)
 
-        # Connections to remove = all possible minus desired
-        to_disconnect = all_possible - desired_connections
-
-        # MAKE: Connect all desired (idempotent - server ignores if already connected)
-        print(f"  Connecting {len(desired_connections)} pairs...")
-        for out_path, in_path in desired_connections:
-            try:
-                self.client.effect_connect(out_path, in_path)
-            except Exception:
-                pass
-
-        # BREAK: Disconnect only what's not needed
-        print(f"  Disconnecting {len(to_disconnect)} obsolete pairs...")
-        for out_path, in_path in to_disconnect:
-            try:
-                self.client.effect_disconnect(out_path, in_path)
-            except Exception:
-                pass
+            for out_p, in_p in to_disconnect:
+                print(f"  [-] Disconnecting: {out_p} -> {in_p}")
+                self.client.effect_disconnect(out_p, in_p)
 
         print("=== RECONNECT SEAMLESS DONE ===\n")
 
