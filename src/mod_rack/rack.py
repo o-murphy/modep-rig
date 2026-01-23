@@ -5,13 +5,15 @@ import string
 
 from mod_rack.config import Config, PluginConfig
 from mod_rack.client import (
-    AddHwPortEvent,
+    GraphAddHwPortEvent,
     Client,
+    GraphConnectEvent,
+    GraphDisconnectEvent,
     LoadingEndEvent,
     LoadingStartEvent,
-    PluginAddEvent,
-    PluginPosEvent,
-    PluginRemoveEvent,
+    GraphPluginAddEvent,
+    GraphPluginPosEvent,
+    GraphPluginRemoveEvent,
 )
 from mod_rack.plugin import Plugin
 
@@ -145,6 +147,9 @@ class Rack:
         # Slots list - порядок визначається по координатах (x, y)
         self.slots: list[PluginSlot] = []
 
+        # Кеш активних з'єднань на сервері: {(src_port, dst_port), ...}
+        self._connections: set[tuple[str, str]] = set()
+
         # Flag to defer reconnections during initial pedalboard loading
         self._loading = True
         # Flag to prevent recursive position updates during normalization
@@ -157,30 +162,35 @@ class Rack:
 
         # Setup WebSocket callbacks BEFORE connecting so we don't miss initial messages
         self.client.ws.on(LoadingStartEvent, self._on_loading_start)
-        self.client.ws.on(AddHwPortEvent, self._on_hw_port_added)
-        self.client.ws.on(PluginAddEvent, self._on_plugin_added)
-        self.client.ws.on(PluginRemoveEvent, self._on_plugin_removed)
-        self.client.ws.on(PluginPosEvent, self._on_position_change)
+        self.client.ws.on(GraphAddHwPortEvent, self._on_hw_port_added)
+        self.client.ws.on(GraphPluginAddEvent, self._on_plugin_added)
+        self.client.ws.on(GraphPluginRemoveEvent, self._on_plugin_removed)
+        self.client.ws.on(GraphAddHwPortEvent, self._on_ports_connect)
+        self.client.ws.on(GraphAddHwPortEvent, self._on_ports_disconnect)
+        self.client.ws.on(GraphPluginPosEvent, self._on_position_change)
         self.client.ws.on(LoadingEndEvent, self._on_loading_end)
 
     def __del__(self):
         self.client.ws.off(LoadingStartEvent, self._on_loading_start)
-        self.client.ws.off(AddHwPortEvent, self._on_hw_port_added)
-        self.client.ws.off(PluginAddEvent, self._on_plugin_added)
-        self.client.ws.off(PluginRemoveEvent, self._on_plugin_removed)
-        self.client.ws.off(PluginPosEvent, self._on_position_change)
+        self.client.ws.off(GraphAddHwPortEvent, self._on_hw_port_added)
+        self.client.ws.off(GraphPluginAddEvent, self._on_plugin_added)
+        self.client.ws.off(GraphPluginRemoveEvent, self._on_plugin_removed)
+        self.client.ws.on(GraphAddHwPortEvent, self._on_ports_connect)
+        self.client.ws.on(GraphAddHwPortEvent, self._on_ports_disconnect)
+        self.client.ws.off(GraphPluginPosEvent, self._on_position_change)
         self.client.ws.off(LoadingEndEvent, self._on_loading_end)
 
     def _on_loading_start(self, event: LoadingStartEvent):
         self._loading = True
         self.slots = []
+        self._connections.clear()
 
     def _on_loading_end(self, event: LoadingEndEvent):
         self._loading = False
         self._normalize_positions()
         self.reconnect_seamless()
 
-    def _on_hw_port_added(self, event: AddHwPortEvent):
+    def _on_hw_port_added(self, event: GraphAddHwPortEvent):
         hw_config = self.config.hardware
 
         if event.is_output:
@@ -191,6 +201,12 @@ class Rack:
         if event.name not in hw_config.disable_ports:
             if event.name not in slot._ports:
                 slot._ports.append(event.name)
+
+    def _on_ports_connect(self, event: GraphConnectEvent):
+        pass
+
+    def _on_ports_disconnect(self, event: GraphDisconnectEvent):
+        pass
 
     def set_callbacks(
         self,
@@ -219,7 +235,7 @@ class Rack:
         slot = self._find_slot_by_label(label)
         return slot.plugin if slot else None
 
-    def _on_position_change(self, event: PluginPosEvent):
+    def _on_position_change(self, event: GraphPluginPosEvent):
         """Handle position change from WebSocket.
 
         Updates slot position and reorders slots based on new coordinates.
@@ -350,7 +366,7 @@ class Rack:
         # Sort by (row, x)
         return sorted(slots, key=lambda s: (rows[s], s.ui_x or 0))
 
-    def _on_plugin_added(self, event: PluginAddEvent):
+    def _on_plugin_added(self, event: GraphPluginAddEvent):
         """
         Handle plugin added via WebSocket feedback.
 
@@ -400,7 +416,7 @@ class Rack:
             # Connect into chain UNLESS we're still initializing
             self.reconnect_seamless()
 
-    def _on_plugin_removed(self, event: PluginRemoveEvent):
+    def _on_plugin_removed(self, event: GraphPluginRemoveEvent):
         """
         Handle plugin removed via WebSocket feedback.
 

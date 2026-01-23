@@ -18,14 +18,16 @@ __all__ = [
     "PingEvent",
     "StatsEvent",
     "SysStatsEvent",
-    "AddHwPortEvent",
+    "GraphAddHwPortEvent",
+    "GraphConnectEvent",
+    "GraphDisconnectEvent",
     "LoadingStartEvent",
     "LoadingEndEvent",
-    "ParamSetEvent",
-    "ParamSetBypassEvent",
-    "PluginPosEvent",
-    "PluginAddEvent",
-    "PluginRemoveEvent",
+    "GraphParamSetEvent",
+    "GraphParamSetBypassEvent",
+    "GraphPluginPosEvent",
+    "GraphPluginAddEvent",
+    "GraphPluginRemoveEvent",
     "UnknownEvent",
 ]
 
@@ -63,7 +65,7 @@ class SysStatsEvent:
 
 
 @dataclass(frozen=True)
-class AddHwPortEvent:
+class GraphAddHwPortEvent:
     name: str
     is_output: bool
 
@@ -78,23 +80,37 @@ class LoadingEndEvent:
     pass
 
 
-# --------------------
-# Pedalboard / Plugin events
 @dataclass(frozen=True)
-class ParamSetEvent:
+class GraphConnectEvent:
+    """connect /graph/gx_duck_delay__ND258bdR/out /graph/gx_fuzz__4e4UwTyJ/in"""
+
+    src_path: str
+    dst_path: str
+
+
+@dataclass(frozen=True)
+class GraphDisconnectEvent:
+    """disconnect /graph/gx_duck_delay__ND258bdR/out /graph/gx_fuzz__4e4UwTyJ/in"""
+
+    src_path: str
+    dst_path: str
+
+
+@dataclass(frozen=True)
+class GraphParamSetEvent:
     label: str
     symbol: str
     value: float = field(compare=False)
 
 
 @dataclass(frozen=True)
-class ParamSetBypassEvent:
+class GraphParamSetBypassEvent:
     label: str
     bypassed: bool = field(compare=False)
 
 
 @dataclass(frozen=True)
-class PluginPosEvent:
+class GraphPluginPosEvent:
     label: str
     x: float = field(compare=False)
     y: float = field(compare=False)
@@ -107,7 +123,7 @@ class UnknownEvent:
 
 
 @dataclass(frozen=True)
-class PluginAddEvent:
+class GraphPluginAddEvent:
     label: str
     uri: str = field(compare=False)
     x: int = field(compare=False)
@@ -115,7 +131,7 @@ class PluginAddEvent:
 
 
 @dataclass(frozen=True)
-class PluginRemoveEvent:
+class GraphPluginRemoveEvent:
     label: str
 
 
@@ -127,12 +143,14 @@ WsEvent = (
     | SysStatsEvent
     | LoadingStartEvent
     | LoadingEndEvent
-    | AddHwPortEvent
-    | ParamSetEvent
-    | ParamSetBypassEvent
-    | PluginPosEvent
-    | PluginAddEvent
-    | PluginRemoveEvent
+    | GraphAddHwPortEvent
+    | GraphConnectEvent
+    | GraphDisconnectEvent
+    | GraphParamSetEvent
+    | GraphParamSetBypassEvent
+    | GraphPluginPosEvent
+    | GraphPluginAddEvent
+    | GraphPluginRemoveEvent
     | UnknownEvent
 )
 
@@ -141,97 +159,87 @@ WsEvent = (
 # Protocol
 # -----------------------------
 class WsProtocol:
+    GRAPH_PREFIX = "/graph/"
+
     @staticmethod
     def parse(message: str) -> WsEvent | None:
-        parts = message.split()
-        if not parts:
-            return None
-        msg_type = parts[0]
+        parts: list[str] = message.split()
+        prefix = WsProtocol.GRAPH_PREFIX
 
-        match msg_type:
-            case "ping":
+        match parts:
+            case ["ping", *_]:
                 return PingEvent()
-            case "stats":
-                return StatsEvent(parts[1], parts[2])
-            case "sys_stats":
-                return SysStatsEvent(parts[1], parts[2], parts[3])
-            case "loading_start":
+            
+            case ["stats", _a, _b, *_]:
+                try:
+                    return StatsEvent(float(_a), int(_b))
+                except ValueError:
+                    pass
+            
+            case ["sys_stats", _a, _b, _c, *_]:
+                try:
+                    return SysStatsEvent(float(_a), int(_b), int(_c))
+                except ValueError:
+                    pass
+            
+            case ["loading_start", *_]:
+                # received 2 values like (1, 1) but we ignoring it
                 return LoadingStartEvent()
-            case "loading_end":
+            
+            case ["loading_end", *_]:
+                # received 2 values like (0, 0) but we ignoring it
                 return LoadingEndEvent()
-            case "add_hw_port":
-                if len(parts) >= 5:
-                    port_path = parts[1]
-                    port_type = parts[2]
-                    is_graph_output = parts[3] == "1"
-                    if port_type == "audio" and port_path.startswith("/graph/"):
-                        return AddHwPortEvent(
-                            name=port_path[7:], is_output=is_graph_output
-                        )
+
+            # audio port
+            case ["add_hw_port", path, "audio", is_out, *_]:
+                return GraphAddHwPortEvent(
+                    name=path.removeprefix(prefix),
+                    is_output=is_out == "1",
+                )
 
             # plugin_pos /graph/label x y
-            case "plugin_pos":
-                if len(parts) >= 4:
-                    graph_path = parts[1]
-                    if graph_path.startswith("/graph/"):
-                        label = graph_path[7:]
-                        try:
-                            x = float(parts[2])
-                            y = float(parts[3])
-                            return PluginPosEvent(label=label, x=x, y=y)
-                        except ValueError:
-                            pass
-            case "add":
-                if len(parts) >= 3:
-                    # add instance uri x y bypassed pVersion offBuild
-                    # parts[0] = "add"
-                    # parts[1] = instance (e.g., "/graph/DS1_1")
-                    # parts[2] = uri
-                    # parts[3] = x, parts[4] = y (optional)
-                    instance = parts[1]
-                    uri = parts[2]
-                    x = None
-                    y = None
-                    if len(parts) >= 5:
-                        try:
-                            x = float(parts[3])
-                            y = float(parts[4])
-                        except ValueError:
-                            x = None
-                            y = None
+            case ["plugin_pos", inst, rx, ry, *_]:
+                try:
+                    x = float(rx)
+                    y = float(ry)
+                    return GraphPluginPosEvent(
+                        label=inst.removeprefix(prefix), x=x, y=y
+                    )
+                except ValueError:
+                    pass
 
-                    if instance.startswith("/graph/"):
-                        label = instance[7:]
-                        return PluginAddEvent(label, uri, x, y)
+            case ["add", inst, uri, rx, ry, *_]:
+                try:
+                    x, y = float(rx), float(ry)
+                except ValueError:
+                    x, y = None, None
+                return GraphPluginAddEvent(inst.removeprefix(prefix), uri, x, y)
 
-            case "remove":
-                if len(parts) >= 2:
-                    # remove /graph/label
-                    graph_path = parts[1]
-                    if graph_path.startswith("/graph/"):
-                        label = graph_path[7:]
-                        return PluginRemoveEvent(label)
+            case ["add", inst, uri, *_]:
+                return GraphPluginAddEvent(inst.removeprefix(prefix), uri, None, None)
 
-            case "param_set":
-                if len(parts) >= 4:
-                    graph_path = parts[1]
-                    symbol = parts[2]
-                    try:
-                        value = float(parts[3])
-                    except ValueError:
-                        return None
-                    if graph_path.startswith("/graph/"):
-                        label = graph_path[7:]
-                        if symbol == ":bypass":
-                            return ParamSetBypassEvent(
-                                label=label, bypassed=value > 0.5
-                            )
-                        else:
-                            return ParamSetEvent(
-                                label=label, symbol=symbol, value=value
-                            )
+            case ["remove", inst, *_]:
+                # remove /graph/label
+                return GraphPluginRemoveEvent(inst.removeprefix(prefix))
 
-        return UnknownEvent(msg_type=msg_type, raw_message=message)
+            case ["connect" | "disconnect" as action, src, dst, *_]:
+                event_cls = GraphConnectEvent if action == "connect" else GraphDisconnectEvent
+                return event_cls(
+                    src.removeprefix(prefix),
+                    dst.removeprefix(prefix),
+                )
+
+            case ["param_set", inst, symbol, val, *_]:
+                try:
+                    f_val = float(val)
+                except ValueError:
+                    return None
+                label = inst.removeprefix(prefix)
+                if symbol == ":bypass":
+                    return GraphParamSetBypassEvent(label=label, bypassed=f_val > 0.5)
+                return GraphParamSetEvent(label=label, symbol=symbol, value=f_val)
+            case [msg_type, *_]:
+                return UnknownEvent(msg_type=msg_type, raw_message=message)
 
 
 class WsConnection:
