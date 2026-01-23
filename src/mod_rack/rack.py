@@ -47,6 +47,8 @@ class Slot:
             plugin: Плагін (обов'язковий)
         """
         self.plugin = plugin
+        self.ui_x: int = 0
+        self.ui_y: int = 0
 
     @property
     def label(self) -> str:
@@ -183,8 +185,9 @@ class Rack:
         else:
             slot: HardwareSlot = self.input_slot
 
-        if event.name not in slot._ports and event.name not in hw_config.disable_ports:
-            slot._ports.append(event.name)
+        if event.name not in hw_config.disable_ports:
+            if event.name not in slot._ports:
+                slot._ports.append(event.name)
 
     def set_callbacks(
         self,
@@ -222,14 +225,14 @@ class Rack:
         if self._normalizing:
             return
 
-        slot = self._find_slot_by_label(event.label)
+        slot: Slot = self._find_slot_by_label(event.label)
         if not slot:
             print(f"  Position change for unknown slot {event.label}, ignoring")
             return
 
         # NOTE: we should ensure that plugin already got an update
-        slot.plugin.ui_x = event.x
-        slot.plugin.ui_y = event.y
+        slot.ui_x = event.x
+        slot.ui_y = event.y
 
         # Skip reordering during initialization
         if self._loading:
@@ -295,20 +298,21 @@ class Rack:
                 new_x = base_x + col * x_step
                 new_y = base_y + row * y_step
 
-                old_x = slot.plugin.ui_x
-                old_y = slot.plugin.ui_y
+                old_x = slot.ui_x
+                old_y = slot.ui_y
 
                 # Only update if position actually changed significantly
                 if abs(new_x - old_x) > 10 or abs(new_y - old_y) > 10:
-                    slot.plugin.ui_x = new_x
-                    slot.plugin.ui_y = new_y
+                    slot.ui_x = new_x
+                    slot.ui_y = new_y
                     self.client.effect_position(slot.label, new_x, new_y)
                     print(f"    {slot.label}: ({old_x}, {old_y}) -> ({new_x}, {new_y})")
         finally:
             self._normalizing = False
 
+    @staticmethod
     def _sort_slots_by_position(
-        self, slots: list[Slot], y_threshold: float = 150.0
+        slots: list[Slot], y_threshold: float = 150.0
     ) -> list[Slot]:
         """Sort slots by position using Y-clustering.
 
@@ -326,7 +330,7 @@ class Rack:
             return []
 
         # Sort by Y first to find clusters
-        sorted_by_y = sorted(slots, key=lambda s: s.plugin.ui_y or 0)
+        sorted_by_y = sorted(slots, key=lambda s: s.ui_y or 0)
 
         # Assign row numbers based on Y-clustering
         rows: dict[Slot, int] = {}
@@ -334,14 +338,14 @@ class Rack:
         prev_y: float | None = None
 
         for slot in sorted_by_y:
-            y = slot.plugin.ui_y or 0
+            y = slot.ui_y or 0
             if prev_y is not None and (y - prev_y) > y_threshold:
                 current_row += 1
             rows[slot] = current_row
             prev_y = y
 
         # Sort by (row, x)
-        return sorted(slots, key=lambda s: (rows[s], s.plugin.ui_x or 0))
+        return sorted(slots, key=lambda s: (rows[s], s.ui_x or 0))
 
     def _on_plugin_added(self, event: PluginAdd):
         """
@@ -353,7 +357,7 @@ class Rack:
         existing = self._find_slot_by_label(event.label)
         if existing:
             # Just update position
-            plugin = existing.plugin
+            slot = existing
         else:
             plugin = Plugin.load_supported(
                 self.client,
@@ -381,8 +385,8 @@ class Rack:
                 self._ext_on_slot_added(slot)
 
         # Store UI position on plugin
-        plugin.ui_x = event.x if event.x is not None else 0
-        plugin.ui_y = event.y if event.y is not None else 0
+        slot.ui_x = event.x if event.x is not None else 0
+        slot.ui_y = event.y if event.y is not None else 0
 
         # Сортуємо
         self.slots = self._sort_slots_by_position(self.slots)
@@ -419,7 +423,8 @@ class Rack:
     # Request API (ініціювання без локальних змін)
     # =========================================================================
 
-    def _generate_label(self, uri: str) -> str:
+    @staticmethod
+    def _generate_label(uri: str) -> str:
         """Generate unique label for plugin."""
         base = Slot._label_from_uri(uri)
         alphabet = string.ascii_letters + string.digits
@@ -580,24 +585,24 @@ class Rack:
         if target_idx <= 0:
             # Insert before first slot
             first = sorted_slots[0]
-            first_x = first.plugin.ui_x or 200
-            first_y = first.plugin.ui_y or 400
+            first_x = first.ui_x or 200
+            first_y = first.ui_y or 400
             return (first_x - x_step, first_y)
 
         if target_idx >= len(sorted_slots):
             # Insert after last slot
             last = sorted_slots[-1]
-            last_x = last.plugin.ui_x or 200
-            last_y = last.plugin.ui_y or 400
+            last_x = last.ui_x or 200
+            last_y = last.ui_y or 400
             return (last_x + x_step, last_y)
 
         # Insert between two slots
         prev_slot = sorted_slots[target_idx - 1]
         next_slot = sorted_slots[target_idx]
 
-        prev_x = prev_slot.plugin.ui_x or 0
-        prev_y = prev_slot.plugin.ui_y or 400
-        next_x = next_slot.plugin.ui_x or 0
+        prev_x = prev_slot.ui_x or 0
+        prev_y = prev_slot.ui_y or 400
+        next_x = next_slot.ui_x or 0
 
         # Position between prev and next
         new_x = (prev_x + next_x) / 2
@@ -680,11 +685,7 @@ class Rack:
     ) -> list[tuple[str, str]]:
         """Calculate connection pairs between src and dst (without connecting)."""
         outputs = src.outputs
-
-        if isinstance(dst, HardwareSlot):
-            inputs = dst.inputs
-        else:
-            inputs = dst.inputs if hasattr(dst, "inputs") else []
+        inputs = dst.inputs
 
         if not outputs or not inputs:
             return []
@@ -768,11 +769,7 @@ class Rack:
     def _disconnect_pair(self, src: Slot | HardwareSlot, dst: Slot | HardwareSlot):
         """Disconnect connections between src and dst."""
         outputs = src.outputs
-
-        if isinstance(dst, HardwareSlot):
-            inputs = dst.inputs
-        else:
-            inputs = dst.inputs if hasattr(dst, "inputs") else []
+        inputs = dst.inputs
 
         for out in outputs:
             for inp in inputs:

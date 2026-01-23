@@ -61,9 +61,6 @@ class Plugin:
         self.inputs = inputs
         self.outputs = outputs
         self._bypassed = False
-        # ui pos
-        self.ui_x: int = 0
-        self.ui_y: int = 0
 
         self._controls: dict[str, ControlPort] = {}
 
@@ -75,12 +72,10 @@ class Plugin:
     def _subscribe(self):
         self.client.ws.on(ParamSetBypass, self._on_bypass_change)
         self.client.ws.on(ParamSet, self._on_param_change)
-        self.client.ws.on(PluginPos, self._on_position_change)
 
     def _unsubscribe(self):
         self.client.ws.off(ParamSetBypass, self._on_bypass_change)
         self.client.ws.off(ParamSet, self._on_param_change)
-        self.client.ws.off(PluginPos, self._on_position_change)
 
     def _on_bypass_change(self, event: ParamSetBypass):
         print("EV", event)
@@ -90,18 +85,6 @@ class Plugin:
     def _on_param_change(self, event: ParamSet):
         if self.label == event.label and event.symbol in self.controls:
             self.set_cached_value(event.symbol, event.value)
-
-    def _on_position_change(self, event: PluginPos):
-        if self.label == event.label:
-            old_x = self.ui_x
-            old_y = self.ui_y
-
-            self.ui_x = event.x
-            self.ui_y = event.y
-
-            print(
-                f"PLUGIN << POSITION: {event.label} ({old_x}, {old_y}) -> ({event.x}, {event.y})"
-            )
 
     @classmethod
     def load_supported(
