@@ -1,6 +1,6 @@
 from .config import Config, HardwareConfig, PluginConfig, RackConfig, ServerConfig
 from .client import Client
-from .rack import Rack, Slot, HardwareSlot
+from .rack import Rack, PluginSlot, HardwareSlot
 from .plugin import Plugin, Port
 from .controls import (
     ControlPort,
@@ -22,7 +22,7 @@ __all__ = [
     "Client",
     # Rack
     "Rack",
-    "Slot",
+    "PluginSlot",
     "HardwareSlot",
     # Plugin
     "Plugin",

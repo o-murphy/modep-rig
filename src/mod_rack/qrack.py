@@ -8,7 +8,7 @@ import signal
 import sys
 from pathlib import Path
 
-from mod_rack.client import ParamSetBypass, ParamSet
+from mod_rack.client import ParamSetBypassEvent, ParamSetEvent
 from mod_rack.plugin import Plugin
 
 # Add src to path
@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QTimer, QObject
 
 from mod_rack import Config, Rack, ControlPort
-from mod_rack.rack import Slot
+from mod_rack.rack import PluginSlot
 
 
 class RackSignals(QObject):
@@ -551,8 +551,8 @@ class MainWindow(QMainWindow):
         self.rack_signals.slot_removed.connect(self._on_ws_slot_removed)
         self.rack_signals.order_changed.connect(self._on_ws_order_changed)
 
-        self.rack.client.ws.on(ParamSetBypass, self._on_ws_bypass_changed)
-        self.rack.client.ws.on(ParamSet, self._on_ws_param_changed)
+        self.rack.client.ws.on(ParamSetBypassEvent, self._on_ws_bypass_changed)
+        self.rack.client.ws.on(ParamSetEvent, self._on_ws_param_changed)
 
         # Connect rack callbacks to emit signals
         self.rack.set_callbacks(
@@ -604,8 +604,8 @@ class MainWindow(QMainWindow):
         self._rebuild_slot_widgets()
 
     def __del__(self):
-        self.rack.client.ws.off(ParamSetBypass, self._on_ws_bypass_changed)
-        self.rack.client.ws.off(ParamSet, self._on_ws_param_changed)
+        self.rack.client.ws.off(ParamSetBypassEvent, self._on_ws_bypass_changed)
+        self.rack.client.ws.off(ParamSetEvent, self._on_ws_param_changed)
 
     def _rebuild_slot_widgets(self):
         """Rebuild all slot widgets from rack state."""
@@ -719,7 +719,7 @@ class MainWindow(QMainWindow):
     # WebSocket event handlers (thread-safe via Qt signals)
     # =========================================================================
 
-    def _on_ws_param_changed(self, event: ParamSet):
+    def _on_ws_param_changed(self, event: ParamSetEvent):
         """Handle parameter change from WebSocket - update UI."""
         # If this is the selected slot, update control widget
         if (
@@ -729,12 +729,12 @@ class MainWindow(QMainWindow):
             widget = self.controls_panel.control_widgets[event.symbol]
             widget.set_value_silent(event.value)
 
-    def _on_ws_bypass_changed(self, event: ParamSetBypass):
+    def _on_ws_bypass_changed(self, event: ParamSetBypassEvent):
         """Handle bypass change from WebSocket - update UI."""
         if event.label == self.selected_label:
             self.controls_panel.set_bypass_silent(event.bypassed)
 
-    def _on_ws_slot_added(self, slot: Slot):
+    def _on_ws_slot_added(self, slot: PluginSlot):
         """Handle slot added from WebSocket - rebuild UI."""
         print(f"UI: Slot added: {slot.label}")
         self._rebuild_slot_widgets()

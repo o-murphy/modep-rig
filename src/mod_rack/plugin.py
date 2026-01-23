@@ -12,7 +12,7 @@ from typing import Any, Iterator
 
 from pytest import Config
 
-from mod_rack.client import ParamSetBypass, Client, ParamSet, PluginPos
+from mod_rack.client import ParamSetBypassEvent, Client, ParamSetEvent, PluginPosEvent
 from mod_rack.config import PluginConfig
 from mod_rack.controls import ControlPort, parse_control_ports
 
@@ -70,19 +70,19 @@ class Plugin:
         self._unsubscribe()
 
     def _subscribe(self):
-        self.client.ws.on(ParamSetBypass, self._on_bypass_change)
-        self.client.ws.on(ParamSet, self._on_param_change)
+        self.client.ws.on(ParamSetBypassEvent, self._on_bypass_change)
+        self.client.ws.on(ParamSetEvent, self._on_param_change)
 
     def _unsubscribe(self):
-        self.client.ws.off(ParamSetBypass, self._on_bypass_change)
-        self.client.ws.off(ParamSet, self._on_param_change)
+        self.client.ws.off(ParamSetBypassEvent, self._on_bypass_change)
+        self.client.ws.off(ParamSetEvent, self._on_param_change)
 
-    def _on_bypass_change(self, event: ParamSetBypass):
+    def _on_bypass_change(self, event: ParamSetBypassEvent):
         print("EV", event)
         if self.label == event.label:
             self._bypassed = event.bypassed
 
-    def _on_param_change(self, event: ParamSet):
+    def _on_param_change(self, event: ParamSetEvent):
         if self.label == event.label and event.symbol in self.controls:
             self.set_cached_value(event.symbol, event.value)
 

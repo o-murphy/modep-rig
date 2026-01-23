@@ -5,24 +5,24 @@ import string
 
 from mod_rack.config import Config, PluginConfig
 from mod_rack.client import (
-    AddHwPort,
+    AddHwPortEvent,
     Client,
-    LoadingEnd,
-    LoadingStart,
-    PluginAdd,
-    PluginPos,
-    PluginRemove,
+    LoadingEndEvent,
+    LoadingStartEvent,
+    PluginAddEvent,
+    PluginPosEvent,
+    PluginRemoveEvent,
 )
 from mod_rack.plugin import Plugin
 
 
 # Type aliases for callbacks
-OnSlotAddedCallback = Callable[["Slot"], None]  # slot
+OnSlotAddedCallback = Callable[["PluginSlot"], None]  # slot
 OnSlotRemovedCallback = Callable[[str], None]  # label
 OnOrderChangeCallback = Callable[[list[str]], None]  # order (list of labels)
 
 
-__all__ = ["Slot", "HardwareSlot", "Rack"]
+__all__ = ["PluginSlot", "HardwareSlot", "Rack"]
 
 
 # =============================================================================
@@ -30,7 +30,7 @@ __all__ = ["Slot", "HardwareSlot", "Rack"]
 # =============================================================================
 
 
-class Slot:
+class PluginSlot:
     """
     Слот для плагіна в ланцюгу ефектів.
 
@@ -71,7 +71,7 @@ class Slot:
         return label.replace("#", "_").replace(" ", "_")
 
     def __eq__(self, other):
-        if not isinstance(other, Slot):
+        if not isinstance(other, PluginSlot):
             return False
         return self.label == other.label
 
@@ -79,7 +79,7 @@ class Slot:
         return hash(self.label)
 
     def __repr__(self):
-        return f"Slot({self.label})"
+        return f"PluginSlot({self.label})"
 
 
 class HardwareSlot:
@@ -106,6 +106,9 @@ class HardwareSlot:
     def __repr__(self):
         kind = "Input" if self._is_input else "Output"
         return f"HardwareSlot({kind}, ports={self._ports})"
+
+
+AnySlot = HardwareSlot | PluginSlot
 
 
 # =============================================================================
@@ -140,7 +143,7 @@ class Rack:
         self.output_slot = HardwareSlot(ports=[], is_input=False)
 
         # Slots list - порядок визначається по координатах (x, y)
-        self.slots: list[Slot] = []
+        self.slots: list[PluginSlot] = []
 
         # Flag to defer reconnections during initial pedalboard loading
         self._loading = True
@@ -153,31 +156,31 @@ class Rack:
         self._ext_on_order_change: OnOrderChangeCallback | None = None
 
         # Setup WebSocket callbacks BEFORE connecting so we don't miss initial messages
-        self.client.ws.on(LoadingStart, self._on_loading_start)
-        self.client.ws.on(AddHwPort, self._on_hw_port_added)
-        self.client.ws.on(PluginAdd, self._on_plugin_added)
-        self.client.ws.on(PluginRemove, self._on_plugin_removed)
-        self.client.ws.on(PluginPos, self._on_position_change)
-        self.client.ws.on(LoadingEnd, self._on_loading_end)
+        self.client.ws.on(LoadingStartEvent, self._on_loading_start)
+        self.client.ws.on(AddHwPortEvent, self._on_hw_port_added)
+        self.client.ws.on(PluginAddEvent, self._on_plugin_added)
+        self.client.ws.on(PluginRemoveEvent, self._on_plugin_removed)
+        self.client.ws.on(PluginPosEvent, self._on_position_change)
+        self.client.ws.on(LoadingEndEvent, self._on_loading_end)
 
     def __del__(self):
-        self.client.ws.off(LoadingStart, self._on_loading_start)
-        self.client.ws.off(AddHwPort, self._on_hw_port_added)
-        self.client.ws.off(PluginAdd, self._on_plugin_added)
-        self.client.ws.off(PluginRemove, self._on_plugin_removed)
-        self.client.ws.off(PluginPos, self._on_position_change)
-        self.client.ws.off(LoadingEnd, self._on_loading_end)
+        self.client.ws.off(LoadingStartEvent, self._on_loading_start)
+        self.client.ws.off(AddHwPortEvent, self._on_hw_port_added)
+        self.client.ws.off(PluginAddEvent, self._on_plugin_added)
+        self.client.ws.off(PluginRemoveEvent, self._on_plugin_removed)
+        self.client.ws.off(PluginPosEvent, self._on_position_change)
+        self.client.ws.off(LoadingEndEvent, self._on_loading_end)
 
-    def _on_loading_start(self, event: LoadingStart):
+    def _on_loading_start(self, event: LoadingStartEvent):
         self._loading = True
         self.slots = []
 
-    def _on_loading_end(self, event: LoadingEnd):
+    def _on_loading_end(self, event: LoadingEndEvent):
         self._loading = False
         self._normalize_positions()
         self.reconnect_seamless()
 
-    def _on_hw_port_added(self, event: AddHwPort):
+    def _on_hw_port_added(self, event: AddHwPortEvent):
         hw_config = self.config.hardware
 
         if event.is_output:
@@ -204,7 +207,7 @@ class Rack:
     # WebSocket event handlers (Server-as-Source-of-Truth)
     # =========================================================================
 
-    def _find_slot_by_label(self, label: str) -> Slot | None:
+    def _find_slot_by_label(self, label: str) -> PluginSlot | None:
         """Find slot by its plugin label."""
         for slot in self.slots:
             if slot.label == label:
@@ -216,7 +219,7 @@ class Rack:
         slot = self._find_slot_by_label(label)
         return slot.plugin if slot else None
 
-    def _on_position_change(self, event: PluginPos):
+    def _on_position_change(self, event: PluginPosEvent):
         """Handle position change from WebSocket.
 
         Updates slot position and reorders slots based on new coordinates.
@@ -225,7 +228,7 @@ class Rack:
         if self._normalizing:
             return
 
-        slot: Slot = self._find_slot_by_label(event.label)
+        slot: PluginSlot = self._find_slot_by_label(event.label)
         if not slot:
             print(f"  Position change for unknown slot {event.label}, ignoring")
             return
@@ -312,8 +315,8 @@ class Rack:
 
     @staticmethod
     def _sort_slots_by_position(
-        slots: list[Slot], y_threshold: float = 150.0
-    ) -> list[Slot]:
+        slots: list[PluginSlot], y_threshold: float = 150.0
+    ) -> list[PluginSlot]:
         """Sort slots by position using Y-clustering.
 
         Slots are grouped into rows based on Y-coordinate proximity,
@@ -333,7 +336,7 @@ class Rack:
         sorted_by_y = sorted(slots, key=lambda s: s.ui_y or 0)
 
         # Assign row numbers based on Y-clustering
-        rows: dict[Slot, int] = {}
+        rows: dict[PluginSlot, int] = {}
         current_row = 0
         prev_y: float | None = None
 
@@ -347,7 +350,7 @@ class Rack:
         # Sort by (row, x)
         return sorted(slots, key=lambda s: (rows[s], s.ui_x or 0))
 
-    def _on_plugin_added(self, event: PluginAdd):
+    def _on_plugin_added(self, event: PluginAddEvent):
         """
         Handle plugin added via WebSocket feedback.
 
@@ -371,7 +374,7 @@ class Rack:
                 return
 
             # Створюємо слот
-            slot = Slot(plugin)
+            slot = PluginSlot(plugin)
 
             # Додаємо слот
             self.slots.append(slot)
@@ -397,7 +400,7 @@ class Rack:
             # Connect into chain UNLESS we're still initializing
             self.reconnect_seamless()
 
-    def _on_plugin_removed(self, event: PluginRemove):
+    def _on_plugin_removed(self, event: PluginRemoveEvent):
         """
         Handle plugin removed via WebSocket feedback.
 
@@ -426,7 +429,7 @@ class Rack:
     @staticmethod
     def _generate_label(uri: str) -> str:
         """Generate unique label for plugin."""
-        base = Slot._label_from_uri(uri)
+        base = PluginSlot._label_from_uri(uri)
         alphabet = string.ascii_letters + string.digits
         uid = "".join(secrets.choice(alphabet) for _ in range(8))
         return f"{base}_{uid}"
@@ -561,7 +564,10 @@ class Rack:
             self._ext_on_order_change([s.label for s in self.slots])
 
     def _calculate_position_for_index(
-        self, target_idx: int, exclude_slot: Slot | None = None, x_step: float = 500.0
+        self,
+        target_idx: int,
+        exclude_slot: PluginSlot | None = None,
+        x_step: float = 500.0,
     ) -> tuple[float, float]:
         """Calculate X,Y position for inserting a slot at target index.
 
@@ -681,7 +687,7 @@ class Rack:
         print("=== RECONNECT SEAMLESS DONE ===\n")
 
     def _get_connection_pairs(
-        self, src: Slot | HardwareSlot, dst: Slot | HardwareSlot
+        self, src: AnySlot, dst: AnySlot
     ) -> list[tuple[str, str]]:
         """Calculate connection pairs between src and dst (without connecting)."""
         outputs = src.outputs
@@ -696,13 +702,13 @@ class Rack:
 
         if isinstance(src, HardwareSlot):
             join_outputs = self.config.hardware.join_inputs
-        elif isinstance(src, Slot) and src.plugin:
+        elif isinstance(src, PluginSlot) and src.plugin:
             src_config = self.config.get_plugin_by_uri(src.plugin.uri)
             join_outputs = src_config.join_outputs if src_config else False
 
         if isinstance(dst, HardwareSlot):
             join_inputs = self.config.hardware.join_outputs
-        elif isinstance(dst, Slot) and dst.plugin:
+        elif isinstance(dst, PluginSlot) and dst.plugin:
             dst_config = self.config.get_plugin_by_uri(dst.plugin.uri)
             join_inputs = dst_config.join_inputs if dst_config else False
 
@@ -726,7 +732,7 @@ class Rack:
 
         return connections
 
-    def _reconnect_slot(self, slot: Slot):
+    def _reconnect_slot(self, slot: PluginSlot):
         """
         Connect a slot into the chain (make-before-break).
 
@@ -756,7 +762,7 @@ class Rack:
         print(f"  Disconnect: {src} -> {dst}")
         self._disconnect_pair(src, dst)
 
-    def _connect_pair(self, src: Slot | HardwareSlot, dst: Slot | HardwareSlot):
+    def _connect_pair(self, src: AnySlot, dst: AnySlot):
         """Connect src outputs to dst inputs."""
         connections = self._get_connection_pairs(src, dst)
         if not connections:
@@ -766,7 +772,7 @@ class Rack:
         for out_path, in_path in connections:
             self.client.effect_connect(out_path, in_path)
 
-    def _disconnect_pair(self, src: Slot | HardwareSlot, dst: Slot | HardwareSlot):
+    def _disconnect_pair(self, src: AnySlot, dst: AnySlot):
         """Disconnect connections between src and dst."""
         outputs = src.outputs
         inputs = dst.inputs
@@ -798,13 +804,13 @@ class Rack:
     # Convenience API
     # =========================================================================
 
-    def __getitem__(self, key: SupportsIndex) -> Slot:
+    def __getitem__(self, key: SupportsIndex) -> PluginSlot:
         return self.slots[key]
 
     def __len__(self) -> int:
         return len(self.slots)
 
-    def get_slot_by_label(self, label: str) -> Slot | None:
+    def get_slot_by_label(self, label: str) -> PluginSlot | None:
         """Find slot by label."""
         return self._find_slot_by_label(label)
 

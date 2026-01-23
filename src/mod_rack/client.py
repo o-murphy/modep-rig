@@ -8,25 +8,32 @@ from urllib.parse import unquote, urlparse
 import requests
 import websocket
 
-__all__ = ["Client", "WsConnection", "WsProtocol", "WsClient"]
+__all__ = [
+    "Client",
+    "WsConnection",
+    "WsProtocol",
+    "WsClient",
+    "WsEvent",
+    # Events
+    "PingEvent",
+    "StatsEvent",
+    "SysStatsEvent",
+    "AddHwPortEvent",
+    "LoadingStartEvent",
+    "LoadingEndEvent",
+    "ParamSetEvent",
+    "ParamSetBypassEvent",
+    "PluginPosEvent",
+    "PluginAddEvent",
+    "PluginRemoveEvent",
+    "UnknownEvent",
+]
 
 
 HEADERS = {
     "Accept": "application/json, text/plain, */*",
     "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0",
 }
-
-# WebSocket message types that indicate structural changes (require rack reset)
-STRUCTURAL_MESSAGES = frozenset(
-    [
-        "add",  # Plugin added
-        "remove",  # Plugin removed
-        "connect",  # Connection made
-        "disconnect",  # Connection removed
-        "load",  # Pedalboard loaded
-        "reset",  # System reset
-    ]
-)
 
 # Messages to ignore (stats, system info)
 IGNORE_MESSAGES = frozenset(["stats", "sys_stats", "ping"])
@@ -38,51 +45,69 @@ IGNORE_MESSAGES = frozenset(["stats", "sys_stats", "ping"])
 
 
 @dataclass(frozen=True)
-class AddHwPort:
+class PingEvent:
+    pass
+
+
+@dataclass(frozen=True)
+class StatsEvent:
+    _a: float = field(compare=False)
+    _b: int = field(compare=False)
+
+
+@dataclass(frozen=True)
+class SysStatsEvent:
+    _a: float = field(compare=False)
+    _b: int = field(compare=False)
+    _c: int = field(compare=False)
+
+
+@dataclass(frozen=True)
+class AddHwPortEvent:
     name: str
     is_output: bool
 
 
 @dataclass(frozen=True)
-class LoadingStart:
+class LoadingStartEvent:
     pass
 
 
 @dataclass(frozen=True)
-class LoadingEnd:
+class LoadingEndEvent:
     pass
 
 
 # --------------------
 # Pedalboard / Plugin events
 @dataclass(frozen=True)
-class ParamSet:
+class ParamSetEvent:
     label: str
     symbol: str
     value: float = field(compare=False)
 
 
 @dataclass(frozen=True)
-class ParamSetBypass:
+class ParamSetBypassEvent:
     label: str
     bypassed: bool = field(compare=False)
 
 
 @dataclass(frozen=True)
-class PluginPos:
+class PluginPosEvent:
     label: str
     x: float = field(compare=False)
     y: float = field(compare=False)
 
 
 @dataclass(frozen=True)
-class GenericMessage:
+class UnknownEvent:
     msg_type: str
     raw_message: str
 
 
 @dataclass(frozen=True)
-class PluginAdd:
+class PluginAddEvent:
     label: str
     uri: str = field(compare=False)
     x: int = field(compare=False)
@@ -90,22 +115,25 @@ class PluginAdd:
 
 
 @dataclass(frozen=True)
-class PluginRemove:
+class PluginRemoveEvent:
     label: str
 
 
 # --------------------
 # Union of all possible events
 WsEvent = (
-    AddHwPort
-    | LoadingStart
-    | LoadingEnd
-    | ParamSet
-    | ParamSetBypass
-    | PluginPos
-    | GenericMessage
-    | PluginAdd
-    | PluginRemove
+    PingEvent
+    | StatsEvent
+    | SysStatsEvent
+    | LoadingStartEvent
+    | LoadingEndEvent
+    | AddHwPortEvent
+    | ParamSetEvent
+    | ParamSetBypassEvent
+    | PluginPosEvent
+    | PluginAddEvent
+    | PluginRemoveEvent
+    | UnknownEvent
 )
 
 
@@ -113,86 +141,97 @@ WsEvent = (
 # Protocol
 # -----------------------------
 class WsProtocol:
-    IGNORE_MESSAGES = {"stats", "sys_stats", "ping"}
-
     @staticmethod
     def parse(message: str) -> WsEvent | None:
         parts = message.split()
         if not parts:
             return None
         msg_type = parts[0]
-        if msg_type in WsProtocol.IGNORE_MESSAGES:
-            return None
 
-        if msg_type == "add_hw_port" and len(parts) >= 5:
-            port_path = parts[1]
-            port_type = parts[2]
-            is_graph_output = parts[3] == "1"
-            if port_type == "audio" and port_path.startswith("/graph/"):
-                return AddHwPort(name=port_path[7:], is_output=is_graph_output)
+        match msg_type:
+            case "ping":
+                return PingEvent()
+            case "stats":
+                return StatsEvent(parts[1], parts[2])
+            case "sys_stats":
+                return SysStatsEvent(parts[1], parts[2], parts[3])
+            case "loading_start":
+                return LoadingStartEvent()
+            case "loading_end":
+                return LoadingEndEvent()
+            case "add_hw_port":
+                if len(parts) >= 5:
+                    port_path = parts[1]
+                    port_type = parts[2]
+                    is_graph_output = parts[3] == "1"
+                    if port_type == "audio" and port_path.startswith("/graph/"):
+                        return AddHwPortEvent(
+                            name=port_path[7:], is_output=is_graph_output
+                        )
 
-        if msg_type == "loading_start":
-            return LoadingStart()
-
-        if msg_type == "loading_end":
-            return LoadingEnd()
-
-        # plugin_pos /graph/label x y
-        if msg_type == "plugin_pos" and len(parts) >= 4:
-            graph_path = parts[1]
-            if graph_path.startswith("/graph/"):
-                label = graph_path[7:]
-                try:
-                    x = float(parts[2])
-                    y = float(parts[3])
-                    return PluginPos(label=label, x=x, y=y)
-                except ValueError:
-                    pass
-
-        if msg_type == "add" and len(parts) >= 3:
-            # add instance uri x y bypassed pVersion offBuild
-            # parts[0] = "add"
-            # parts[1] = instance (e.g., "/graph/DS1_1")
-            # parts[2] = uri
-            # parts[3] = x, parts[4] = y (optional)
-            instance = parts[1]
-            uri = parts[2]
-            x = None
-            y = None
-            if len(parts) >= 5:
-                try:
-                    x = float(parts[3])
-                    y = float(parts[4])
-                except ValueError:
+            # plugin_pos /graph/label x y
+            case "plugin_pos":
+                if len(parts) >= 4:
+                    graph_path = parts[1]
+                    if graph_path.startswith("/graph/"):
+                        label = graph_path[7:]
+                        try:
+                            x = float(parts[2])
+                            y = float(parts[3])
+                            return PluginPosEvent(label=label, x=x, y=y)
+                        except ValueError:
+                            pass
+            case "add":
+                if len(parts) >= 3:
+                    # add instance uri x y bypassed pVersion offBuild
+                    # parts[0] = "add"
+                    # parts[1] = instance (e.g., "/graph/DS1_1")
+                    # parts[2] = uri
+                    # parts[3] = x, parts[4] = y (optional)
+                    instance = parts[1]
+                    uri = parts[2]
                     x = None
                     y = None
+                    if len(parts) >= 5:
+                        try:
+                            x = float(parts[3])
+                            y = float(parts[4])
+                        except ValueError:
+                            x = None
+                            y = None
 
-            if instance.startswith("/graph/"):
-                label = instance[7:]
-                return PluginAdd(label, uri, x, y)
+                    if instance.startswith("/graph/"):
+                        label = instance[7:]
+                        return PluginAddEvent(label, uri, x, y)
 
-        if msg_type == "remove" and len(parts) >= 2:
-            # remove /graph/label
-            graph_path = parts[1]
-            if graph_path.startswith("/graph/"):
-                label = graph_path[7:]
-                return PluginRemove(label)
+            case "remove":
+                if len(parts) >= 2:
+                    # remove /graph/label
+                    graph_path = parts[1]
+                    if graph_path.startswith("/graph/"):
+                        label = graph_path[7:]
+                        return PluginRemoveEvent(label)
 
-        if msg_type == "param_set" and len(parts) >= 4:
-            graph_path = parts[1]
-            symbol = parts[2]
-            try:
-                value = float(parts[3])
-            except ValueError:
-                return None
-            if graph_path.startswith("/graph/"):
-                label = graph_path[7:]
-                if symbol == ":bypass":
-                    return ParamSetBypass(label=label, bypassed=value > 0.5)
-                else:
-                    return ParamSet(label=label, symbol=symbol, value=value)
+            case "param_set":
+                if len(parts) >= 4:
+                    graph_path = parts[1]
+                    symbol = parts[2]
+                    try:
+                        value = float(parts[3])
+                    except ValueError:
+                        return None
+                    if graph_path.startswith("/graph/"):
+                        label = graph_path[7:]
+                        if symbol == ":bypass":
+                            return ParamSetBypassEvent(
+                                label=label, bypassed=value > 0.5
+                            )
+                        else:
+                            return ParamSetEvent(
+                                label=label, symbol=symbol, value=value
+                            )
 
-        return GenericMessage(msg_type=msg_type, raw_message=message)
+        return UnknownEvent(msg_type=msg_type, raw_message=message)
 
 
 class WsConnection:
@@ -246,6 +285,7 @@ class WsConnection:
             return False
         try:
             self._ws.send(message)
+            print(f"WS >> {message}")
             return True
         except Exception as e:
             if self._on_error:
@@ -308,22 +348,31 @@ WsEventT = TypeVar("WsEventT", bound=WsEvent)
 
 class StateSnapshot:
     def __init__(self):
-        # ключ = тип події, значення = список подій
-        self._events: defaultdict[type, list] = defaultdict(list)
+        # Використовуємо dict для O(1) пошуку еквівалентних подій
+        self._events: defaultdict[type, dict] = defaultdict(dict)
         self._lock = threading.RLock()
 
     def add(self, event):
-        """Додати подію"""
+        """
+        Додає подію. Якщо еквівалентна подія (за правилами dataclass)
+        вже існує — вона буде оновлена новим значенням.
+        """
         with self._lock:
-            self._events[type(event)].append(event)
+            event_type = type(event)
+            # 1. Якщо подія вже є (наприклад, той самий параметр іншого значення),
+            # pop видалить стару версію, щоб нова стала в кінець черги.
+            self._events[event_type].pop(event, None)
+
+            # 2. Додаємо нову версію події
+            self._events[event_type][event] = None
 
     def remove(self, event):
         """Видалити конкретну подію"""
         with self._lock:
-            events = self._events.get(type(event))
-            if events and event in events:
-                events.remove(event)
-                if not events:
+            events_dict = self._events.get(type(event))
+            if events_dict:
+                events_dict.pop(event, None)
+                if not events_dict:
                     del self._events[type(event)]
 
     def clear(self):
@@ -334,7 +383,8 @@ class StateSnapshot:
     def __getitem__(self, event_type: Type):
         """Отримати список подій певного типу"""
         with self._lock:
-            return list(self._events.get(event_type, []))
+            # Повертає впорядкований список унікальних за структурою подій
+            return list(self._events.get(event_type, {}).keys())
 
 
 # -----------------------------
@@ -398,6 +448,9 @@ class WsClient:
         if not event:
             return
 
+        if isinstance(event, PingEvent):
+            self.conn.send("pong")
+
         # dispatch
         self._dispatch(event)
 
@@ -422,7 +475,6 @@ class WsClient:
     def effect_param_set(self, label: str, symbol: str, value) -> bool:
         command = f"param_set /graph/{label}/{symbol} {value}"
         if self.conn.connected:
-            print(f"WS >> {command}")
             return self.conn.send(command)
         return False
 
@@ -432,7 +484,6 @@ class WsClient:
     def plugin_pos(self, label: str, x: float, y: float) -> bool:
         command = f"plugin_pos /graph/{label} {float(x)} {float(y)}"
         if self.conn.connected:
-            print(f"WS >> {command}")
             return self.conn.send(command)
         return False
 
