@@ -1,3 +1,4 @@
+import threading
 from typing import Callable, SupportsIndex
 
 import secrets
@@ -139,6 +140,8 @@ class Rack:
         else:
             self.client = client
 
+        self._lock = threading.RLock()
+
         self._prevent_normalization = prevent_normalization
 
         self.input_slot = HardwareSlot(ports=[], is_input=True)
@@ -162,21 +165,21 @@ class Rack:
 
         # Setup WebSocket callbacks BEFORE connecting so we don't miss initial messages
         self.client.ws.on(LoadingStartEvent, self._on_loading_start)
-        self.client.ws.on(GraphAddHwPortEvent, self._on_hw_port_added)
-        self.client.ws.on(GraphPluginAddEvent, self._on_plugin_added)
-        self.client.ws.on(GraphPluginRemoveEvent, self._on_plugin_removed)
-        self.client.ws.on(GraphAddHwPortEvent, self._on_ports_connect)
-        self.client.ws.on(GraphAddHwPortEvent, self._on_ports_disconnect)
+        self.client.ws.on(GraphAddHwPortEvent, self._on_graph_hw_port_add)
+        self.client.ws.on(GraphPluginAddEvent, self._on_graph_plugin_add)
+        self.client.ws.on(GraphPluginRemoveEvent, self._on_graph_plugin_remove)
+        self.client.ws.on(GraphConnectEvent, self._on_graph_connect)
+        self.client.ws.on(GraphDisconnectEvent, self._on_graph_disconnect)
         self.client.ws.on(GraphPluginPosEvent, self._on_position_change)
         self.client.ws.on(LoadingEndEvent, self._on_loading_end)
 
     def __del__(self):
         self.client.ws.off(LoadingStartEvent, self._on_loading_start)
-        self.client.ws.off(GraphAddHwPortEvent, self._on_hw_port_added)
-        self.client.ws.off(GraphPluginAddEvent, self._on_plugin_added)
-        self.client.ws.off(GraphPluginRemoveEvent, self._on_plugin_removed)
-        self.client.ws.on(GraphAddHwPortEvent, self._on_ports_connect)
-        self.client.ws.on(GraphAddHwPortEvent, self._on_ports_disconnect)
+        self.client.ws.off(GraphAddHwPortEvent, self._on_graph_hw_port_add)
+        self.client.ws.off(GraphPluginAddEvent, self._on_graph_plugin_add)
+        self.client.ws.off(GraphPluginRemoveEvent, self._on_graph_plugin_remove)
+        self.client.ws.off(GraphConnectEvent, self._on_graph_connect)
+        self.client.ws.off(GraphDisconnectEvent, self._on_graph_disconnect)
         self.client.ws.off(GraphPluginPosEvent, self._on_position_change)
         self.client.ws.off(LoadingEndEvent, self._on_loading_end)
 
@@ -190,7 +193,7 @@ class Rack:
         self._normalize_positions()
         self.reconnect_seamless()
 
-    def _on_hw_port_added(self, event: GraphAddHwPortEvent):
+    def _on_graph_hw_port_add(self, event: GraphAddHwPortEvent):
         hw_config = self.config.hardware
 
         if event.is_output:
@@ -202,11 +205,18 @@ class Rack:
             if event.name not in slot._ports:
                 slot._ports.append(event.name)
 
-    def _on_ports_connect(self, event: GraphConnectEvent):
-        pass
+    def _on_graph_connect(self, event: GraphConnectEvent):
+        with self._lock:
+            pair = (event.src_path, event.dst_path)
+            if pair not in self._connections:
+                self._connections.add(pair)
+                print(f"  [Cache] Connected: {event.src_path} -> {event.dst_path}")
 
-    def _on_ports_disconnect(self, event: GraphDisconnectEvent):
-        pass
+    def _on_graph_disconnect(self, event: GraphDisconnectEvent):
+        with self._lock:
+            pair = (event.src_path, event.dst_path)
+            self._connections.discard(pair)
+            print(f"  [Cache] Disconnected: {event.src_path} -> {event.dst_path}")
 
     def set_callbacks(
         self,
@@ -366,7 +376,7 @@ class Rack:
         # Sort by (row, x)
         return sorted(slots, key=lambda s: (rows[s], s.ui_x or 0))
 
-    def _on_plugin_added(self, event: GraphPluginAddEvent):
+    def _on_graph_plugin_add(self, event: GraphPluginAddEvent):
         """
         Handle plugin added via WebSocket feedback.
 
@@ -416,7 +426,7 @@ class Rack:
             # Connect into chain UNLESS we're still initializing
             self.reconnect_seamless()
 
-    def _on_plugin_removed(self, event: GraphPluginRemoveEvent):
+    def _on_graph_plugin_remove(self, event: GraphPluginRemoveEvent):
         """
         Handle plugin removed via WebSocket feedback.
 
@@ -427,8 +437,23 @@ class Rack:
             print(f"  Slot {event.label} not found, skipping")
             return
 
-        self.slots.remove(slot)
-        print(f"  Removed slot: {event.label}")
+        with self._lock:
+            # 1. Очищуємо кеш з'єднань від усіх портів цього плагіна
+            # Шукаємо з'єднання, де шлях починається з /graph/label/
+            prefix = f"{event.label}/"
+            
+            to_remove = {
+                pair for pair in self._connections 
+                if pair[0].startswith(prefix) or pair[1].startswith(prefix)
+            }
+            
+            for pair in to_remove:
+                self._connections.discard(pair)
+                print(f"  [Cache Cleanup] Removed stale connection: {pair[0]} -> {pair[1]}")
+
+            # 2. Видаляємо сам слот
+            self.slots.remove(slot)
+            print(f"  Removed slot: {event.label}")
 
         # Normalize remaining positions to fill the gap
         if not self._loading:
@@ -801,20 +826,28 @@ class Rack:
                     pass
 
     def _disconnect_everything(self):
-        """Disconnect all connections."""
-        all_outputs = list(self.input_slot.outputs)
-        all_inputs = list(self.output_slot.inputs)
+        """
+        Видаляє всі активні з'єднання, про які знає локальний кеш.
+        Використовує O(N) операцій замість перебору всіх портів.
+        """
+        with self._lock:
+            if not self._connections:
+                print("  No active connections to disconnect.")
+                return
 
-        for slot in self.slots:
-            all_outputs.extend(slot.outputs)
-            all_inputs.extend(slot.inputs)
+            print(f"  Disconnecting everything: {len(self._connections)} connections")
 
-        for out in all_outputs:
-            for inp in all_inputs:
+            # Робимо копію списку для ітерації, оскільки WS-події
+            # можуть спробувати змінити set через discard()
+            current_pairs = list(self._connections)
+
+            for out_path, in_path in current_pairs:
                 try:
-                    self.client.effect_disconnect(out, inp)
-                except Exception:
-                    pass
+                    # Ми не видаляємо з self._connections вручну,
+                    # це зробить _on_graph_disconnect, коли прийде відповідь від сервера.
+                    self.client.effect_disconnect(out_path, in_path)
+                except Exception as e:
+                    print(f"    Error disconnecting {out_path} -> {in_path}: {e}")
 
     # =========================================================================
     # Convenience API

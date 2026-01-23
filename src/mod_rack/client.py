@@ -83,7 +83,6 @@ class LoadingEndEvent:
 @dataclass(frozen=True)
 class GraphConnectEvent:
     """connect /graph/gx_duck_delay__ND258bdR/out /graph/gx_fuzz__4e4UwTyJ/in"""
-
     src_path: str
     dst_path: str
 
@@ -91,7 +90,6 @@ class GraphConnectEvent:
 @dataclass(frozen=True)
 class GraphDisconnectEvent:
     """disconnect /graph/gx_duck_delay__ND258bdR/out /graph/gx_fuzz__4e4UwTyJ/in"""
-
     src_path: str
     dst_path: str
 
