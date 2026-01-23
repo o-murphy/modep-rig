@@ -121,7 +121,9 @@ class Rig:
     - WS handlers: _on_plugin_added(), _on_plugin_removed()
     """
 
-    def __init__(self, config: Config, client: Client | None = None, prevent_normalization = False):
+    def __init__(
+        self, config: Config, client: Client | None = None, prevent_normalization=False
+    ):
         self.config = config
         # If caller did not provide a Client, create one but delay WebSocket
         # connection until after callbacks are installed to avoid missing messages.
@@ -178,19 +180,11 @@ class Rig:
 
         if event.is_output:
             slot: HardwareSlot = self.output_slot
-            if hw_config.outputs is not None:
-                slot._ports = hw_config.outputs
-                print("HW Outputs Overriden:", slot._ports)
-            elif event.name not in slot._ports:
-                slot._ports.append(event.name)
-
         else:
             slot: HardwareSlot = self.input_slot
-            if hw_config.inputs is not None:
-                slot._ports = hw_config.inputs
-                print("HW Inputs Overriden:", slot._ports)
-            elif event.name not in slot._ports:
-                slot._ports.append(event.name)
+
+        if event.name not in slot._ports and event.name not in hw_config.disable_ports:
+            slot._ports.append(event.name)
 
     def set_callbacks(
         self,
@@ -286,7 +280,7 @@ class Rig:
         """
         if self._prevent_normalization:
             return
-        
+
         if not self.slots:
             return
 
@@ -314,8 +308,8 @@ class Rig:
             self._normalizing = False
 
     def _sort_slots_by_position(
-        self, slots: list["Slot"], y_threshold: float = 150.0
-    ) -> list["Slot"]:
+        self, slots: list[Slot], y_threshold: float = 150.0
+    ) -> list[Slot]:
         """Sort slots by position using Y-clustering.
 
         Slots are grouped into rows based on Y-coordinate proximity,
@@ -335,7 +329,7 @@ class Rig:
         sorted_by_y = sorted(slots, key=lambda s: s.plugin.ui_y or 0)
 
         # Assign row numbers based on Y-clustering
-        rows: dict["Slot", int] = {}
+        rows: dict[Slot, int] = {}
         current_row = 0
         prev_y: float | None = None
 
@@ -392,7 +386,7 @@ class Rig:
 
         # Сортуємо
         self.slots = self._sort_slots_by_position(self.slots)
-        
+
         # Нормалізуємо тільки після завантаження
         if not self._loading:
             self._normalize_positions()
@@ -509,7 +503,7 @@ class Rig:
             src = s
 
         dst = self.output_slot
-        for s in self.slots[idx + 1:]:
+        for s in self.slots[idx + 1 :]:
             dst = s
             break
 
@@ -562,7 +556,7 @@ class Rig:
             self._ext_on_order_change([s.label for s in self.slots])
 
     def _calculate_position_for_index(
-        self, target_idx: int, exclude_slot: "Slot | None" = None, x_step: float = 500.0
+        self, target_idx: int, exclude_slot: Slot | None = None, x_step: float = 500.0
     ) -> tuple[float, float]:
         """Calculate X,Y position for inserting a slot at target index.
 
@@ -649,13 +643,15 @@ class Rig:
 
         # Calculate all possible connections (current state unknown, so we consider all)
         all_possible: set[tuple[str, str]] = set()
-        all_outputs = list(self.input_slot.outputs)
-        all_inputs = list(self.output_slot.inputs)
+        all_ports = []
+        all_ports.extend(self.input_slot.outputs)
+        all_ports.extend(self.output_slot.inputs)
+        all_ports.extend(self.config.hardware.disable_ports)
         for slot in self.slots:
-            all_outputs.extend(slot.outputs)
-            all_inputs.extend(slot.inputs)
-        for out in all_outputs:
-            for inp in all_inputs:
+            all_ports.extend(slot.outputs)
+            all_ports.extend(slot.inputs)
+        for out in all_ports:
+            for inp in all_ports:
                 all_possible.add((out, inp))
 
         # Connections to remove = all possible minus desired
@@ -679,7 +675,9 @@ class Rig:
 
         print("=== RECONNECT SEAMLESS DONE ===\n")
 
-    def _get_connection_pairs(self, src, dst) -> list[tuple[str, str]]:
+    def _get_connection_pairs(
+        self, src: Slot | HardwareSlot, dst: Slot | HardwareSlot
+    ) -> list[tuple[str, str]]:
         """Calculate connection pairs between src and dst (without connecting)."""
         outputs = src.outputs
 
@@ -697,13 +695,13 @@ class Rig:
 
         if isinstance(src, HardwareSlot):
             join_outputs = self.config.hardware.join_inputs
-        elif hasattr(src, "plugin") and src.plugin:
+        elif isinstance(src, Slot) and src.plugin:
             src_config = self.config.get_plugin_by_uri(src.plugin.uri)
             join_outputs = src_config.join_outputs if src_config else False
 
         if isinstance(dst, HardwareSlot):
             join_inputs = self.config.hardware.join_outputs
-        elif hasattr(dst, "plugin") and dst.plugin:
+        elif isinstance(dst, Slot) and dst.plugin:
             dst_config = self.config.get_plugin_by_uri(dst.plugin.uri)
             join_inputs = dst_config.join_inputs if dst_config else False
 
@@ -757,7 +755,7 @@ class Rig:
         print(f"  Disconnect: {src} -> {dst}")
         self._disconnect_pair(src, dst)
 
-    def _connect_pair(self, src, dst):
+    def _connect_pair(self, src: Slot | HardwareSlot, dst: Slot | HardwareSlot):
         """Connect src outputs to dst inputs."""
         connections = self._get_connection_pairs(src, dst)
         if not connections:
@@ -767,7 +765,7 @@ class Rig:
         for out_path, in_path in connections:
             self.client.effect_connect(out_path, in_path)
 
-    def _disconnect_pair(self, src, dst):
+    def _disconnect_pair(self, src: Slot | HardwareSlot, dst: Slot | HardwareSlot):
         """Disconnect connections between src and dst."""
         outputs = src.outputs
 
