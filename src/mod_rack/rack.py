@@ -163,6 +163,12 @@ class Rack:
         self._ext_on_slot_removed: OnSlotRemovedCallback | None = None
         self._ext_on_order_change: OnOrderChangeCallback | None = None
 
+        self._subscribe()
+
+    def __del__(self):
+        self._unsubscribe()
+
+    def _subscribe(self):
         # Setup WebSocket callbacks BEFORE connecting so we don't miss initial messages
         self.client.ws.on(LoadingStartEvent, self._on_loading_start)
         self.client.ws.on(GraphAddHwPortEvent, self._on_graph_hw_port_add)
@@ -173,7 +179,7 @@ class Rack:
         self.client.ws.on(GraphPluginPosEvent, self._on_position_change)
         self.client.ws.on(LoadingEndEvent, self._on_loading_end)
 
-    def __del__(self):
+    def _unsubscribe(self):
         self.client.ws.off(LoadingStartEvent, self._on_loading_start)
         self.client.ws.off(GraphAddHwPortEvent, self._on_graph_hw_port_add)
         self.client.ws.off(GraphPluginAddEvent, self._on_graph_plugin_add)

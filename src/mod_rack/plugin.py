@@ -10,10 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterator
 
-from pytest import Config
-
 from mod_rack.client import GraphParamSetBypassEvent, Client, GraphParamSetEvent
-from mod_rack.config import PluginConfig
+from mod_rack.config import Config, PluginConfig
 from mod_rack.controls import ControlPort, parse_control_ports
 
 
@@ -40,31 +38,25 @@ class Plugin:
         uri: Plugin URI
         label: Unique instance label (e.g., "DS1_0")
         name: Display name
-        inputs: Audio input ports
-        outputs: Audio output ports
-        slot: Reference to containing Slot
     """
 
     def __init__(
-        self,
-        client: Client,
-        uri: str,
-        label: str,
-        name: str,
-        inputs: list[Port],
-        outputs: list[Port],
+        self, client: Client, uri: str, label: str, config: PluginConfig | None
     ):
         self.client = client
         self.uri = uri
         self.label = label
-        self.name = name
-        self.inputs = inputs
-        self.outputs = outputs
+        self.inputs: list[Port] = []
+        self.outputs: list[Port] = []
         self._bypassed = False
-
+        self._config = config
         self._controls: dict[str, ControlPort] = {}
 
-        # self._subscribe()
+        self._effect_data = self.client.effect_get(self.uri)
+        self.name = self._effect_data.get("name", self.label)
+        self._load_plugin_ports()
+        self._load_controls()
+        self._subscribe()
 
     def __del__(self):
         self._unsubscribe()
@@ -78,7 +70,6 @@ class Plugin:
         self.client.ws.off(GraphParamSetEvent, self._on_param_change)
 
     def _on_bypass_change(self, event: GraphParamSetBypassEvent):
-        print("EV", event)
         if self.label == event.label:
             self._bypassed = event.bypassed
 
@@ -96,56 +87,36 @@ class Plugin:
             print(f"  Plugin {uri} not in whitelist, ignoring")
             return
 
-        effect_data = client.effect_get(uri)
-        if not effect_data:
-            print(f"  Failed to get effect data for {uri}")
-            return
-
-        inputs, outputs = cls._load_plugin_ports(label, uri, effect_data, config)
-        print(
-            f"  Parsed ports: inputs={[p.symbol for p in inputs]}, outputs={[p.symbol for p in outputs]}"
-        )
-
         plugin = cls(
             client=client,  # Буде встановлено після створення Slot
             uri=uri,
             label=label,
-            name=effect_data.get("name", label),
-            inputs=inputs,
-            outputs=outputs,
+            config=plugin_config,
         )
-
-        plugin._load_controls(effect_data)
-        plugin._subscribe()
         return plugin
 
-    @staticmethod
-    def _load_plugin_ports(
-        label: str, uri: str, effect_data: dict, config: Config
-    ) -> tuple[list[Port], list[Port]]:
+    def _load_plugin_ports(self) -> tuple[list[Port], list[Port]]:
         """Load and filter plugin ports from effect data.
 
         Args:
             label: Plugin label for graph paths
-            uri: Plugin URI for config lookup
             effect_data: Data from effect_get API
 
         Returns:
             Tuple of (inputs, outputs) Port lists
         """
         # Parse all ports from effect data
-        all_inputs = []
-        all_outputs = []
 
-        ports = effect_data.get("ports", {})
-        audio_ports = ports.get("audio", {})
+        ports: dict = self._effect_data.get("ports", {})
+        audio_ports: dict = ports.get("audio", {})
 
-        plugin_config: PluginConfig = config.get_plugin_by_uri(uri)
+        config = self._config
+        label = self.label
 
         for p in audio_ports.get("input", []):
-            if p["symbol"] in plugin_config.disable_ports:
+            if config is not None and p["symbol"] in config.disable_ports:
                 continue
-            all_inputs.append(
+            self.inputs.append(
                 Port(
                     symbol=p["symbol"],
                     name=p.get("name", p["symbol"]),
@@ -153,9 +124,9 @@ class Plugin:
                 )
             )
         for p in audio_ports.get("output", []):
-            if p["symbol"] in plugin_config.disable_ports:
+            if config is not None and p["symbol"] in config.disable_ports:
                 continue
-            all_outputs.append(
+            self.outputs.append(
                 Port(
                     symbol=p["symbol"],
                     name=p.get("name", p["symbol"]),
@@ -163,16 +134,11 @@ class Plugin:
                 )
             )
 
-        print(all_inputs)
-        return all_inputs, all_outputs
+        print(f"  Parsed ports: inputs={self.inputs}, outputs={self.outputs}")
 
-    def _load_controls(self, effect_data: dict[str, Any]) -> None:
+    def _load_controls(self) -> None:
         """Load control metadata from effect_get response."""
-        controls = parse_control_ports(effect_data)
-        self._populate(controls)
-
-    def _populate(self, controls: list[ControlPort]) -> None:
-        """Populate controls from parsed data."""
+        controls = parse_control_ports(self._effect_data)
         self._controls = {c.symbol: c for c in controls}
 
     # --- Dict-like access to control values ---
