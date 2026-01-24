@@ -1,8 +1,10 @@
 import threading
-from typing import Callable, SupportsIndex
+import time
+from typing import Any, Callable, SupportsIndex
 
 import secrets
 import string
+import weakref
 
 from mod_rack.config import Config, PluginConfig
 from mod_rack.client import (
@@ -25,7 +27,7 @@ OnSlotRemovedCallback = Callable[[str], None]  # label
 OnOrderChangeCallback = Callable[[list[str]], None]  # order (list of labels)
 
 
-__all__ = ["PluginSlot", "HardwareSlot", "Rack"]
+__all__ = ["PluginSlot", "HardwareSlot", "Rack", "EventMonitor"]
 
 
 # =============================================================================
@@ -213,6 +215,103 @@ class GridLayoutManager:
 # =============================================================================
 
 
+class _Color:
+    @staticmethod
+    def _info(msg):
+        print(f"\033[32m{msg}\033[0m")
+
+    @staticmethod
+    def _blue(msg):
+        print(f"\033[34m{msg}\033[0m")
+
+    @staticmethod
+    def _red(msg):
+        print(f"\033[31m{msg}\033[0m")
+
+    @staticmethod
+    def _yellow(msg):
+        print(f"\033[33m{msg}\033[0m")
+
+    @staticmethod
+    def _debug(msg):
+        print(f"\033[90m{msg}\033[0m")
+
+
+class EventMonitor:
+    def __init__(self, config: Config):
+        self.config = config
+        self.client = Client(config.server.url)
+
+        self._lock = threading.RLock()
+        self._loading = True
+
+        self._order_change_listeners: set[Callable[[Any], None]] = set()
+        self._pos_change_listeners: set[Callable[[Any], None]] = set()
+
+        self._subscribe()
+
+    def run(self):
+        self.client.ws.connect()
+        while True:
+            time.sleep(1)
+
+    def on_order_rig_changed(self, cb: Callable[[Any], None]):
+        self._add_listener(self._order_change_listeners, cb)
+
+    def on_pos_change_listeners(self, cb: Callable[[Any], None]):
+        self._add_listener(self._pos_change_listeners, cb)
+
+    def _subscribe(self):
+        # Setup WebSocket callbacks BEFORE connecting so we don't miss initial messages
+        self.client.ws.on(LoadingStartEvent, self._on_loading_start)
+        self.client.ws.on(LoadingEndEvent, self._on_loading_end)
+        self.client.ws.on(GraphAddHwPortEvent, self._on_graph_hw_port_add)
+        self.client.ws.on(GraphPluginAddEvent, self._on_graph_plugin_add)
+        self.client.ws.on(GraphPluginRemoveEvent, self._on_graph_plugin_remove)
+        self.client.ws.on(GraphConnectEvent, self._on_graph_connect)
+        self.client.ws.on(GraphDisconnectEvent, self._on_graph_disconnect)
+        self.client.ws.on(GraphPluginPosEvent, self._on_position_change)
+
+    def _add_listener(self, listeners_set, cb):
+        try:
+            ref = weakref.WeakMethod(cb)
+        except TypeError:
+            ref = weakref.ref(cb)
+
+        with self._lock:
+            listeners_set.add(ref)
+
+    def _on_loading_start(self, event: LoadingStartEvent):
+        print("E", event)
+        with self._lock:
+            self._loading = True
+        _Color._yellow("\u25f7 Loading start, initializing...")
+
+    def _on_loading_end(self, event: LoadingEndEvent):
+        with self._lock:
+            self._loading = False
+        _Color._info("\u25cf Loading end, monitoring...")
+
+    def _on_graph_hw_port_add(self, event: GraphAddHwPortEvent):
+        type_ = "Out" if event.is_output else "In"
+        _Color._blue(f"+ HW {type_:<3}: {event.name}")
+
+    def _on_graph_plugin_add(self, event: GraphPluginAddEvent):
+        _Color._blue(f"+ Plugin: {event.label}")
+
+    def _on_graph_plugin_remove(self, event: GraphPluginRemoveEvent):
+        _Color._red(f"- Plugin: {event.label}")
+
+    def _on_graph_connect(self, event: GraphConnectEvent):
+        _Color._blue(f"\u221e Connected: {event.src_path} \u21e2 {event.dst_path}")
+
+    def _on_graph_disconnect(self, event: GraphDisconnectEvent):
+        _Color._red(f"\u22b6 Disconnected: {event.src_path} \u2307 {event.dst_path}")
+
+    def _on_position_change(self, event: GraphPluginPosEvent):
+        _Color._yellow(f"\u2316 Pos: {event.label}, ({event.x}, {event.y})")
+
+
 class Rack:
     """
     Rig — ланцюг ефектів: Input -> [Slot 0] -> [Slot 1] -> ... -> Output
@@ -258,6 +357,7 @@ class Rack:
         self.layout_manager = GridLayoutManager()
 
         self._subscribe()
+        self.client.ws.connect()
 
     def _subscribe(self):
         # Setup WebSocket callbacks BEFORE connecting so we don't miss initial messages

@@ -157,8 +157,7 @@ WsEvent = (
 
 EventCallBack = Callable[[WsEvent], None]
 EventCallBackRef: TypeAlias = (
-    weakref.ReferenceType[EventCallBack]
-    | weakref.WeakMethod[EventCallBack]
+    weakref.ReferenceType[EventCallBack] | weakref.WeakMethod[EventCallBack]
 )
 
 
@@ -492,6 +491,9 @@ class WsClient:
         self._state.clear()
 
     def _on_message(self, message: str):
+        # Log unknown messages
+        print(f"WS << {message}")
+
         event = WsProtocol.parse(message)
         if not event:
             return
@@ -501,9 +503,6 @@ class WsClient:
 
         # dispatch
         self._dispatch(event)
-
-        # Log unknown messages
-        print(f"WS << {message}")
 
     def _on_error(self, error):
         print(f"WS Помилка: {error}")
@@ -553,11 +552,11 @@ class Client:
         self.base_url = base_url
         self.version = self._get_version()
 
-        self.ws = WsClient(self.base_url)
-        self.ws.connect()
-
         self.plugins_list: list[dict] = []
         self._load_effects_list()
+
+        self.ws = WsClient(self.base_url)
+        # self.ws.connect()
 
     def _get_version(self) -> str:
         try:
