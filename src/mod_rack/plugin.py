@@ -8,7 +8,7 @@ dict-like access to control parameters with automatic API synchronization.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterator
+from typing import Iterator
 
 from mod_rack.client import GraphParamSetBypassEvent, Client, GraphParamSetEvent
 from mod_rack.config import Config, PluginConfig
@@ -58,16 +58,9 @@ class Plugin:
         self._load_controls()
         self._subscribe()
 
-    def __del__(self):
-        self._unsubscribe()
-
     def _subscribe(self):
         self.client.ws.on(GraphParamSetBypassEvent, self._on_bypass_change)
         self.client.ws.on(GraphParamSetEvent, self._on_param_change)
-
-    def _unsubscribe(self):
-        self.client.ws.off(GraphParamSetBypassEvent, self._on_bypass_change)
-        self.client.ws.off(GraphParamSetEvent, self._on_param_change)
 
     def _on_bypass_change(self, event: GraphParamSetBypassEvent):
         if self.label == event.label:
@@ -85,7 +78,7 @@ class Plugin:
         plugin_config = config.get_plugin_by_uri(uri)
         if not plugin_config:
             print(f"  Plugin {uri} not in whitelist, ignoring")
-            return
+            return None
 
         plugin = cls(
             client=client,  # Буде встановлено після створення Slot
@@ -95,7 +88,7 @@ class Plugin:
         )
         return plugin
 
-    def _load_plugin_ports(self) -> tuple[list[Port], list[Port]]:
+    def _load_plugin_ports(self) -> None:
         """Load and filter plugin ports from effect data.
 
         Args:

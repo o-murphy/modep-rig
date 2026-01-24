@@ -20,6 +20,8 @@ mod-qrack = "mod_rack.qrack:main"
 
 [dependency-groups]
 dev = [
+    "mypy>=1.19.1",
     "pytest>=9.0.2",
     "ruff>=0.14.13",
+    "types-requests>=2.32.4.20260107",
 ]

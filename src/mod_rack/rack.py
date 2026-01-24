@@ -41,7 +41,7 @@ class PluginSlot:
     Slot ідентифікується по label плагіна.
     """
 
-    def __init__(self, plugin: Plugin, pos_x: int = 0, pos_y: int = 0):
+    def __init__(self, plugin: Plugin, pos_x: float = 0, pos_y: float = 0):
         """
         Створює слот з плагіном.
 
@@ -50,8 +50,8 @@ class PluginSlot:
             plugin: Плагін (обов'язковий)
         """
         self.plugin = plugin
-        self.pos_x: int = pos_x
-        self.pos_y: int = pos_y
+        self.pos_x: float = pos_x
+        self.pos_y: float = pos_y
 
     @property
     def label(self) -> str:
@@ -165,9 +165,6 @@ class Rack:
 
         self._subscribe()
 
-    def __del__(self):
-        self._unsubscribe()
-
     def _subscribe(self):
         # Setup WebSocket callbacks BEFORE connecting so we don't miss initial messages
         self.client.ws.on(LoadingStartEvent, self._on_loading_start)
@@ -178,16 +175,6 @@ class Rack:
         self.client.ws.on(GraphDisconnectEvent, self._on_graph_disconnect)
         self.client.ws.on(GraphPluginPosEvent, self._on_position_change)
         self.client.ws.on(LoadingEndEvent, self._on_loading_end)
-
-    def _unsubscribe(self):
-        self.client.ws.off(LoadingStartEvent, self._on_loading_start)
-        self.client.ws.off(GraphAddHwPortEvent, self._on_graph_hw_port_add)
-        self.client.ws.off(GraphPluginAddEvent, self._on_graph_plugin_add)
-        self.client.ws.off(GraphPluginRemoveEvent, self._on_graph_plugin_remove)
-        self.client.ws.off(GraphConnectEvent, self._on_graph_connect)
-        self.client.ws.off(GraphDisconnectEvent, self._on_graph_disconnect)
-        self.client.ws.off(GraphPluginPosEvent, self._on_position_change)
-        self.client.ws.off(LoadingEndEvent, self._on_loading_end)
 
     def _on_loading_start(self, event: LoadingStartEvent):
         self._loading = True
@@ -203,9 +190,9 @@ class Rack:
         hw_config = self.config.hardware
 
         if event.is_output:
-            slot: HardwareSlot = self.output_slot
+            slot = self.output_slot
         else:
-            slot: HardwareSlot = self.input_slot
+            slot = self.input_slot
 
         if event.name not in hw_config.disable_ports:
             if event.name not in slot._ports:
@@ -260,7 +247,7 @@ class Rack:
         if self._normalizing:
             return
 
-        slot: PluginSlot = self._find_slot_by_label(event.label)
+        slot = self._find_slot_by_label(event.label)
         if not slot:
             print(f"  Position change for unknown slot {event.label}, ignoring")
             return
@@ -555,11 +542,11 @@ class Rack:
         idx = self.slots.index(slot)
 
         # Find neighbors
-        src = self.input_slot
+        src: AnySlot = self.input_slot
         for s in self.slots[:idx]:
             src = s
 
-        dst = self.output_slot
+        dst: AnySlot = self.output_slot
         for s in self.slots[idx + 1 :]:
             dst = s
             break

@@ -86,7 +86,7 @@ class KnobControl(ControlWidget):
 
         # Label
         self.label = QLabel(control.name)
-        self.label.setAlignment(Qt.AlignCenter)
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.label)
 
         # Dial
@@ -101,7 +101,7 @@ class KnobControl(ControlWidget):
 
         # Value display
         self.value_label = QLabel(control.format_value())
-        self.value_label.setAlignment(Qt.AlignCenter)
+        self.value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.value_label)
 
     def _value_to_slider(self, value: float) -> int:
@@ -202,7 +202,7 @@ class IntegerControl(ControlWidget):
 
         # Label
         self.label = QLabel(control.name)
-        self.label.setAlignment(Qt.AlignCenter)
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.label)
 
         # Slider with integer steps
@@ -215,7 +215,7 @@ class IntegerControl(ControlWidget):
 
         # Value display
         self.value_label = QLabel(control.format_value())
-        self.value_label.setAlignment(Qt.AlignCenter)
+        self.value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.value_label)
 
     def _on_slider_changed(self, value: int):
@@ -259,14 +259,16 @@ class PluginSelectorDialog(QDialog):
             category = p_config.category or "General"
 
             item = QListWidgetItem(f"{name}\n  [{category}]")
-            item.setData(Qt.UserRole, uri)
+            item.setData(Qt.ItemDataRole.UserRole, uri)
             self.list_widget.addItem(item)
 
         self.list_widget.itemDoubleClicked.connect(self._on_double_click)
         layout.addWidget(self.list_widget)
 
         # Buttons
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -296,11 +298,11 @@ class SlotWidget(QFrame):
         self.index = index
         self.is_selected = False
 
-        self.setFrameStyle(QFrame.Box | QFrame.Raised)
+        self.setFrameStyle(QFrame.Shape.Box | QFrame.Shadow.Raised)
         self.setLineWidth(2)
-        self.setCursor(Qt.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMinimumSize(120, 80)
-        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
         self.setAcceptDrops(True)
         self._drag_start_pos = None
@@ -309,12 +311,12 @@ class SlotWidget(QFrame):
 
         # Slot number
         self.slot_num_label = QLabel(f"Slot {index}")
-        self.slot_num_label.setAlignment(Qt.AlignCenter)
+        self.slot_num_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.slot_num_label)
 
         # Plugin name
         self.plugin_label = QLabel(plugin_name)
-        self.plugin_label.setAlignment(Qt.AlignCenter)
+        self.plugin_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.plugin_label.setWordWrap(True)
         layout.addWidget(self.plugin_label)
 
@@ -423,8 +425,8 @@ class ControlsPanel(QScrollArea):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         self.container = QWidget()
-        self.layout = QVBoxLayout(self.container)
-        self.layout.setAlignment(Qt.AlignTop)
+        self._layout = QVBoxLayout(self.container)
+        self._layout.setAlignment(Qt.AlignTop)
         self.setWidget(self.container)
 
         self.plugin: Plugin | None = None
@@ -435,7 +437,7 @@ class ControlsPanel(QScrollArea):
         # Placeholder
         self.placeholder = QLabel("Select a plugin to see controls")
         self.placeholder.setAlignment(Qt.AlignCenter)
-        self.layout.addWidget(self.placeholder)
+        self._layout.addWidget(self.placeholder)
 
     def set_plugin(self, plugin, label: str | None = None):
         """Set the plugin to display controls for."""
@@ -465,12 +467,12 @@ class ControlsPanel(QScrollArea):
 
         header.addStretch()
 
-        self.layout.addLayout(header)
+        self._layout.addLayout(header)
 
         # Separator
         line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        self.layout.addWidget(line)
+        line.setFrameShape(QFrame.Shape.HLine)
+        self._layout.addWidget(line)
 
         # Controls grid
         controls_group = QGroupBox("Controls")
@@ -491,8 +493,8 @@ class ControlsPanel(QScrollArea):
                 col = 0
                 row += 1
 
-        self.layout.addWidget(controls_group)
-        self.layout.addStretch()
+        self._layout.addWidget(controls_group)
+        self._layout.addStretch()
 
     def _clear_controls(self):
         """Remove all control widgets."""
@@ -502,14 +504,14 @@ class ControlsPanel(QScrollArea):
         self.bypass_checkbox = None
 
         # Clear layout
-        while self.layout.count():
-            item = self.layout.takeAt(0)
+        while self._layout.count():
+            item = self._layout.takeAt(0)
             if item.widget() and item.widget() != self.placeholder:
                 item.widget().deleteLater()
             elif item.layout():
                 self._clear_layout(item.layout())
 
-        self.layout.addWidget(self.placeholder)
+        self._layout.addWidget(self.placeholder)
 
     def _clear_layout(self, layout):
         while layout.count():
@@ -603,10 +605,6 @@ class MainWindow(QMainWindow):
         # Initial state
         self._rebuild_slot_widgets()
 
-    def __del__(self):
-        self.rack.client.ws.off(GraphParamSetBypassEvent, self._on_ws_bypass_changed)
-        self.rack.client.ws.off(GraphParamSetEvent, self._on_ws_param_changed)
-
     def _rebuild_slot_widgets(self):
         """Rebuild all slot widgets from rack state."""
         # Clear existing widgets
@@ -678,7 +676,7 @@ class MainWindow(QMainWindow):
     def _on_replace_plugin(self, label: str):
         """Replace plugin - remove old, add new."""
         dialog = PluginSelectorDialog(self.rack, self)
-        if dialog.exec() == QDialog.Accepted and dialog.selected_uri:
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.selected_uri:
             # Preserve slot index: remove old, then request add at same index
             slot = self.rack.get_slot_by_label(label)
             insert_idx = self.rack.slots.index(slot) if slot else None

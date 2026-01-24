@@ -2,7 +2,8 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 import time
 import threading
-from typing import Any, Callable, Type, TypeVar
+import weakref
+from typing import Any, Callable, Type, TypeAlias, TypeVar, cast
 from urllib.parse import unquote, urlparse
 
 import requests
@@ -126,8 +127,8 @@ class UnknownEvent:
 class GraphPluginAddEvent:
     label: str
     uri: str = field(compare=False)
-    x: int = field(compare=False)
-    y: int = field(compare=False)
+    x: float = field(compare=False, default=0)
+    y: float = field(compare=False, default=0)
 
 
 @dataclass(frozen=True)
@@ -152,6 +153,12 @@ WsEvent = (
     | GraphPluginAddEvent
     | GraphPluginRemoveEvent
     | UnknownEvent
+)
+
+EventCallBack = Callable[[WsEvent], None]
+EventCallBackRef: TypeAlias = (
+    weakref.ReferenceType[EventCallBack]
+    | weakref.WeakMethod[EventCallBack]
 )
 
 
@@ -200,8 +207,8 @@ class WsProtocol:
             # plugin_pos /graph/label x y
             case ["plugin_pos", inst, rx, ry, *_]:
                 try:
-                    x = float(rx)
-                    y = float(ry)
+                    x: float = float(rx)
+                    y: float = float(ry)
                     return GraphPluginPosEvent(
                         label=inst.removeprefix(prefix), x=x, y=y
                     )
@@ -212,11 +219,11 @@ class WsProtocol:
                 try:
                     x, y = float(rx), float(ry)
                 except ValueError:
-                    x, y = None, None
+                    x, y = 0, 0
                 return GraphPluginAddEvent(inst.removeprefix(prefix), uri, x, y)
 
             case ["add", inst, uri, *_]:
-                return GraphPluginAddEvent(inst.removeprefix(prefix), uri, None, None)
+                return GraphPluginAddEvent(inst.removeprefix(prefix), uri, 0, 0)
 
             case ["remove", inst, *_]:
                 # remove /graph/label
@@ -242,6 +249,7 @@ class WsProtocol:
                 return GraphParamSetEvent(label=label, symbol=symbol, value=f_val)
             case [msg_type, *_]:
                 return UnknownEvent(msg_type=msg_type, raw_message=message)
+        return None
 
 
 class WsConnection:
@@ -294,7 +302,8 @@ class WsConnection:
         if not self.connected:
             return False
         try:
-            self._ws.send(message)
+            if self._ws is not None and self.connected:
+                self._ws.send(message)
             print(f"WS >> {message}")
             return True
         except Exception as e:
@@ -412,7 +421,7 @@ class WsClient:
 
         self._state = StateSnapshot()
 
-        self._listeners: defaultdict[Type[WsEvent], set[Callable[[WsEvent], None]]] = (
+        self._listeners: defaultdict[Type[WsEvent], set[EventCallBackRef]] = (
             defaultdict(set)
         )
         self._lock = threading.RLock()
@@ -427,25 +436,54 @@ class WsClient:
         )
 
     def on(self, event_type: Type[WsEventT], cb: Callable[[WsEventT], None]):
-        with self._lock:
-            self._listeners[event_type].add(cb)
+        ref: EventCallBackRef
+        cb_any = cast(EventCallBack, cb)
+        key = cast(type[WsEvent], event_type)
 
+        try:
+            ref = weakref.WeakMethod(cb_any)  # type: ignore[arg-type] # bound method
+        except TypeError:
+            ref = weakref.ref(cb_any)
+
+        with self._lock:
+            self._listeners[key].add(ref)
+
+        # replay state (type-safe)
         for event in self._state[event_type]:
             cb(event)
 
     def off(self, event_type: Type[WsEventT], cb: Callable[[WsEventT], None]):
+        ref: EventCallBackRef
+        cb_any = cast(EventCallBack, cb)
+        key = cast(type[WsEvent], event_type)
+
         with self._lock:
-            self._listeners[event_type].discard(cb)
+            refs = self._listeners.get(key)
+            if not refs:
+                return
+            for ref in list(refs):
+                if ref() is cb_any:
+                    refs.remove(ref)
 
     def _dispatch(self, event: WsEvent):
         # add event to local state
         self._state.add(event)
 
         with self._lock:
-            listeners = list(self._listeners.get(type(event), ()))
+            refs = list(self._listeners.get(type(event), ()))
 
-        for cb in listeners:
-            cb(event)
+        dead: list[EventCallBackRef] = []
+
+        for ref in refs:
+            cb = ref()
+            if cb is None:
+                dead.append(ref)
+            else:
+                cb(event)
+
+        if dead:
+            with self._lock:
+                self._listeners[type(event)].difference_update(dead)
 
     # -------------------
     # WsConnection callbacks
@@ -518,7 +556,7 @@ class Client:
         self.ws = WsClient(self.base_url)
         self.ws.connect()
 
-        self.effects_list = []
+        self.plugins_list: list[dict] = []
         self._load_effects_list()
 
     def _get_version(self) -> str:
@@ -535,7 +573,7 @@ class Client:
 
     def _load_effects_list(self):
         data = self._get("/effect/list")
-        self.effects_list = data if isinstance(data, list) else []
+        self.plugins_list = data if isinstance(data, list) else []
 
     def _get(self, path: str, **kwargs):
         url = self.base_url + path
@@ -587,12 +625,12 @@ class Client:
     def effect_list(self):
         """Отримати список всіх доступних ефектів"""
         data = self._get("/effect/list")
-        self.effects_list = data if isinstance(data, list) else []
-        return self.effects_list
+        self.plugins_list = data if isinstance(data, list) else []
+        return self.plugins_list
 
     def lookup_effect(self, uri: str) -> dict | None:
         """Знайти ефект за URI в кешованому списку"""
-        for effect in self.effects_list:
+        for effect in self.plugins_list:
             if effect.get("uri") == uri:
                 return effect
         return None
@@ -662,7 +700,7 @@ class Client:
             "/pedalboard/load_bundle", bundlepath=pedalboard, isDefault=is_default
         )
 
-    def pedalboard_save(self, title: str = None):
+    def pedalboard_save(self, title: str | None = None):
         """Зберегти поточний педалборд"""
         params = {}
         if title:
