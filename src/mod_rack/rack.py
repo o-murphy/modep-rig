@@ -115,7 +115,101 @@ AnySlot = HardwareSlot | PluginSlot
 
 
 # =============================================================================
-# Rig
+# GridLayoutManager
+# =============================================================================
+
+
+class GridLayoutManager:
+    def __init__(
+        self,
+        *,
+        x_step: int = 600,
+        y_step: int = 600,
+        base_x: int = 200,
+        base_y: int = 400,
+        max_per_row: int = 4,
+        y_threshold: float = 150.0,
+    ):
+        """
+        Layout manager for arranging PluginSlots on a grid.
+
+        Args:
+            x_step: Horizontal spacing between plugins.
+            y_step: Vertical spacing between rows.
+            base_x: X coordinate of the first plugin in each row.
+            base_y: Y coordinate of the first row.
+            max_per_row: Maximum number of plugins per row.
+            y_threshold: Maximum Y difference to consider slots in the same row for sorting.
+        """
+        self.x_step = x_step
+        self.y_step = y_step
+        self.base_x = base_x
+        self.base_y = base_y
+        self.max_per_row = max_per_row
+        self.y_threshold = y_threshold
+
+    def sort_slots(self, slots: list[PluginSlot]) -> list[PluginSlot]:
+        """
+        Sort slots by layout order using Y-clustering.
+
+        Slots are grouped into rows based on Y-coordinate proximity,
+        then sorted left-to-right within each row.
+
+        Args:
+            slots: List of PluginSlot instances to sort.
+
+        Returns:
+            List of PluginSlot sorted by row and X coordinate.
+        """
+        if not slots:
+            return []
+
+        sorted_by_y = sorted(slots, key=lambda s: s.pos_y or 0)
+
+        rows: dict[PluginSlot, int] = {}
+        current_row = 0
+        prev_y: float | None = None
+
+        for slot in sorted_by_y:
+            y = slot.pos_y or 0
+            if prev_y is not None and (y - prev_y) > self.y_threshold:
+                current_row += 1
+            rows[slot] = current_row
+            prev_y = y
+
+        return sorted(slots, key=lambda s: (rows[s], s.pos_x or 0))
+
+    def normalize(
+        self, slots: list[PluginSlot]
+    ) -> dict[PluginSlot, tuple[float, float]]:
+        """
+        Calculate normalized positions for slots on a grid.
+
+        Places slots in rows of `max_per_row` plugins each, filling rows
+        left-to-right before moving to the next row.
+
+        Args:
+            slots: List of PluginSlot instances to normalize.
+
+        Returns:
+            Dictionary mapping each PluginSlot to its (x, y) normalized position.
+        """
+        result = {}
+
+        for idx, slot in enumerate(slots):
+            row = idx // self.max_per_row
+            col = idx % self.max_per_row
+
+            x = self.base_x + col * self.x_step
+            y = self.base_y + row * self.y_step
+
+            result[slot] = (x, y)
+
+        return result
+
+
+# =============================================================================
+# Rack
 # =============================================================================
 
 
@@ -155,13 +249,13 @@ class Rack:
 
         # Flag to defer reconnections during initial pedalboard loading
         self._loading = True
-        # Flag to prevent recursive position updates during normalization
-        self._normalizing = False
 
         # External callbacks (for UI)
         self._ext_on_slot_added: OnSlotAddedCallback | None = None
         self._ext_on_slot_removed: OnSlotRemovedCallback | None = None
         self._ext_on_order_change: OnOrderChangeCallback | None = None
+
+        self.layout_manager = GridLayoutManager()
 
         self._subscribe()
 
@@ -183,7 +277,14 @@ class Rack:
 
     def _on_loading_end(self, event: LoadingEndEvent):
         self._loading = False
-        self._normalize_positions()
+
+        # Використовуємо LayoutManager
+        new_positions = self.layout_manager.normalize(self.slots)
+        for slot, (x, y) in new_positions.items():
+            slot.pos_x = x
+            slot.pos_y = y
+            self.client.effect_position(slot.label, x, y)
+
         self.reconnect_seamless()
 
     def _on_graph_hw_port_add(self, event: GraphAddHwPortEvent):
@@ -244,130 +345,46 @@ class Rack:
         Updates slot position and reorders slots based on new coordinates.
         """
         # Skip position updates during normalization (we're sending, not receiving)
-        if self._normalizing:
-            return
+        with self._lock:
+            slot = self._find_slot_by_label(event.label)
+            if not slot:
+                print(f"  Position change for unknown slot {event.label}, ignoring")
+                return
 
-        slot = self._find_slot_by_label(event.label)
-        if not slot:
-            print(f"  Position change for unknown slot {event.label}, ignoring")
-            return
+            # NOTE: we should ensure that plugin already got an update
+            slot.pos_x = event.x
+            slot.pos_y = event.y
 
-        # NOTE: we should ensure that plugin already got an update
-        slot.pos_x = event.x
-        slot.pos_y = event.y
+            # Skip reordering during initialization
+            if self._loading:
+                return
 
-        # Skip reordering during initialization
-        if self._loading:
-            return
+            # Reorder slots based on new positions and reconnect if order changed
+            self._reorder_by_layout()
 
-        # Reorder slots based on new positions and reconnect if order changed
-        self._reorder_by_position()
-
-    def _reorder_by_position(self):
-        """Reorder slots based on their UI positions using Y-clustering."""
-        if not self.slots:
-            return
-
+    def _reorder_by_layout(self):
         old_order = [s.label for s in self.slots]
-        self.slots = self._sort_slots_by_position(self.slots)
+        self.slots = self.layout_manager.sort_slots(self.slots)
         new_order = [s.label for s in self.slots]
 
         if old_order != new_order:
-            print(f"  Order changed: {old_order} -> {new_order}")
             self.reconnect_seamless()
             if self._ext_on_order_change:
                 self._ext_on_order_change(new_order)
-        else:
-            print("  Order unchanged after position update")
 
-        # Always normalize positions after any position change
-        self._normalize_positions()
+        self._apply_normalization()
 
-    def _normalize_positions(
-        self,
-        x_step: int = 600,
-        y_step: int = 600,
-        base_x: int = 200,
-        base_y: int = 400,
-        max_per_row: int = 4,
-    ):
-        """Normalize slot positions to a grid with rows first, then columns.
-
-        Places slots in rows of max_per_row plugins each, filling rows
-        left-to-right before moving to the next row.
-
-        Args:
-            x_step: Horizontal spacing between plugins
-            y_step: Vertical spacing between rows
-            base_x: X coordinate for first plugin in each row
-            base_y: Y coordinate for first row
-            max_per_row: Maximum plugins per row (default 5)
-        """
+    def _apply_normalization(self):
         if self._prevent_normalization:
             return
 
-        if not self.slots:
-            return
-
-        print("  Normalizing positions to grid...")
-
-        self._normalizing = True
-        try:
-            for idx, slot in enumerate(self.slots):
-                row = idx // max_per_row
-                col = idx % max_per_row
-
-                new_x = base_x + col * x_step
-                new_y = base_y + row * y_step
-
-                old_x = slot.pos_x
-                old_y = slot.pos_y
-
-                # Only update if position actually changed significantly
-                if abs(new_x - old_x) > 10 or abs(new_y - old_y) > 10:
-                    slot.pos_x = new_x
-                    slot.pos_y = new_y
-                    self.client.effect_position(slot.label, new_x, new_y)
-                    print(f"    {slot.label}: ({old_x}, {old_y}) -> ({new_x}, {new_y})")
-        finally:
-            self._normalizing = False
-
-    @staticmethod
-    def _sort_slots_by_position(
-        slots: list[PluginSlot], y_threshold: float = 150.0
-    ) -> list[PluginSlot]:
-        """Sort slots by position using Y-clustering.
-
-        Slots are grouped into rows based on Y-coordinate proximity,
-        then sorted left-to-right within each row.
-
-        Args:
-            slots: List of slots to sort
-            y_threshold: Max Y difference to be considered same row
-
-        Returns:
-            Sorted list of slots
-        """
-        if not slots:
-            return []
-
-        # Sort by Y first to find clusters
-        sorted_by_y = sorted(slots, key=lambda s: s.pos_y or 0)
-
-        # Assign row numbers based on Y-clustering
-        rows: dict[PluginSlot, int] = {}
-        current_row = 0
-        prev_y: float | None = None
-
-        for slot in sorted_by_y:
-            y = slot.pos_y or 0
-            if prev_y is not None and (y - prev_y) > y_threshold:
-                current_row += 1
-            rows[slot] = current_row
-            prev_y = y
-
-        # Sort by (row, x)
-        return sorted(slots, key=lambda s: (rows[s], s.pos_x or 0))
+        with self._lock:
+            updates = self.layout_manager.normalize(self.slots)
+            for slot, (x, y) in updates.items():
+                if abs(slot.pos_x - x) > 10 or abs(slot.pos_y - y) > 10:
+                    slot.pos_x = x
+                    slot.pos_y = y
+                    self.client.effect_position(slot.label, x, y)
 
     def _on_graph_plugin_add(self, event: GraphPluginAddEvent):
         """
@@ -406,7 +423,7 @@ class Rack:
             )
 
             # Сортуємо
-            self.slots = self._sort_slots_by_position(self.slots)
+            self.slots = self.layout_manager.sort_slots(self.slots)
 
             # Сповіщуємо UI
             if self._ext_on_slot_added:
@@ -414,7 +431,11 @@ class Rack:
 
             # Нормалізуємо тільки після завантаження
             if not self._loading:
-                self._normalize_positions()
+                new_positions = self.layout_manager.normalize(self.slots)
+                for slot, (x, y) in new_positions.items():
+                    slot.pos_x = x
+                    slot.pos_y = y
+                    self.client.effect_position(slot.label, x, y)
                 # Connect into chain UNLESS we're still initializing
                 self.reconnect_seamless()
 
@@ -452,7 +473,11 @@ class Rack:
 
         # Normalize remaining positions to fill the gap
         if not self._loading:
-            self._normalize_positions()
+            new_positions = self.layout_manager.normalize(self.slots)
+            for slot, (x, y) in new_positions.items():
+                slot.pos_x = x
+                slot.pos_y = y
+                self.client.effect_position(slot.label, x, y)
 
         # Notify UI
         if self._ext_on_slot_removed:
@@ -592,7 +617,11 @@ class Rack:
         self.reconnect_seamless()
 
         # Normalize positions (updates server)
-        self._normalize_positions()
+        new_positions = self.layout_manager.normalize(self.slots)
+        for slot, (x, y) in new_positions.items():
+            slot.pos_x = x
+            slot.pos_y = y
+            self.client.effect_position(slot.label, x, y)
 
         # Notify UI
         if self._ext_on_order_change:
@@ -602,52 +631,53 @@ class Rack:
         self,
         target_idx: int,
         exclude_slot: PluginSlot | None = None,
-        x_step: float = 500.0,
     ) -> tuple[float, float]:
-        """Calculate X,Y position for inserting a slot at target index.
+        """
+        Calculate X,Y position for inserting a slot at target index.
 
         Args:
             target_idx: Target position in the chain
             exclude_slot: Slot to exclude from calculations (the one being moved)
-            x_step: Horizontal spacing between plugins
 
         Returns:
             (x, y) coordinates
         """
-        # Get slots excluding the one being moved
+        layout = self.layout  # GridLayoutManager
+
+        # Список інших слотів без exclude_slot
         other_slots = [s for s in self.slots if s != exclude_slot]
 
+        # Якщо нема інших слотів, вставляємо в базову позицію
         if not other_slots:
-            return (200.0, 400.0)
+            return (layout.base_x, layout.base_y)
 
-        # Sort other slots by current position
-        sorted_slots = self._sort_slots_by_position(other_slots)
+        # Сортуємо слоти по Y-кластерах та X
+        sorted_slots = layout.sort_slots(other_slots)
 
+        # Вставка перед першим
         if target_idx <= 0:
-            # Insert before first slot
             first = sorted_slots[0]
-            first_x = first.pos_x or 200
-            first_y = first.pos_y or 400
-            return (first_x - x_step, first_y)
+            return (first.pos_x - layout.x_step, first.pos_y)
 
+        # Вставка після останнього
         if target_idx >= len(sorted_slots):
-            # Insert after last slot
             last = sorted_slots[-1]
-            last_x = last.pos_x or 200
-            last_y = last.pos_y or 400
-            return (last_x + x_step, last_y)
+            return (last.pos_x + layout.x_step, last.pos_y)
 
-        # Insert between two slots
+        # Вставка між двома слотами
         prev_slot = sorted_slots[target_idx - 1]
         next_slot = sorted_slots[target_idx]
 
-        prev_x = prev_slot.pos_x or 0
-        prev_y = prev_slot.pos_y or 400
-        next_x = next_slot.pos_x or 0
+        # Ряд обчислюємо по Y базовим кроком
+        row = (target_idx - 1) // layout.max_per_row
+        new_y = layout.base_y + row * layout.y_step
 
-        # Position between prev and next
-        new_x = (prev_x + next_x) / 2
-        return (new_x, prev_y)
+        # X розташовуємо посередині або мінімум x_step від prev
+        new_x = max(
+            prev_slot.pos_x + layout.x_step, (prev_slot.pos_x + next_slot.pos_x) / 2
+        )
+
+        return (new_x, new_y)
 
     # =========================================================================
     # Routing
