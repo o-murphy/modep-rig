@@ -41,14 +41,6 @@ from mod_rack import Config, Rack, ControlPort
 from mod_rack.rack import PluginSlot
 
 
-class RackSignals(QObject):
-    """Qt signals for Rack WebSocket events."""
-
-    slot_added = Signal(object)  # slot
-    slot_removed = Signal(str)  # label
-    order_changed = Signal(list)  # order (list of labels)
-
-
 class ControlWidget(QWidget):
     """Base widget for a plugin control."""
 
@@ -541,27 +533,18 @@ class ControlsPanel(QScrollArea):
 
 class MainWindow(QMainWindow):
     """Main application window."""
+    order_changed_signal = Signal(list)
 
     def __init__(self, rack: Rack):
         super().__init__()
         self.rack = rack
         self.selected_label: str | None = None
 
-        # Setup signals for thread-safe UI updates
-        self.rack_signals = RackSignals()
-        self.rack_signals.slot_added.connect(self._on_ws_slot_added)
-        self.rack_signals.slot_removed.connect(self._on_ws_slot_removed)
-        self.rack_signals.order_changed.connect(self._on_ws_order_changed)
-
+        # Connect rack callbacks to emit signals
+        self.order_changed_signal.connect(self._rebuild_slot_widgets)
+        self.rack.on_rack_order_changed(self._handle_rack_cb)
         self.rack.client.ws.on(GraphParamSetBypassEvent, self._on_ws_bypass_changed)
         self.rack.client.ws.on(GraphParamSetEvent, self._on_ws_param_changed)
-
-        # Connect rack callbacks to emit signals
-        self.rack.set_callbacks(
-            on_slot_added=lambda slot: self.rack_signals.slot_added.emit(slot),
-            on_slot_removed=lambda label: self.rack_signals.slot_removed.emit(label),
-            on_order_change=lambda order: self.rack_signals.order_changed.emit(order),
-        )
 
         self.setWindowTitle("MODEP Rack Controller")
         self.setMinimumSize(800, 600)
@@ -602,8 +585,12 @@ class MainWindow(QMainWindow):
         self.controls_panel.setMinimumWidth(500)
         main_layout.addWidget(self.controls_panel, stretch=1)
 
-        # Initial state
-        self._rebuild_slot_widgets()
+        self.rack.client.ws.connect()
+
+    def _handle_rack_cb(self, slots: list):
+        """Цей метод виконується у фоновому потоці Orchestrator."""
+        # Просто перекидаємо дані в головний потік через сигнал
+        self.order_changed_signal.emit(slots)
 
     def _rebuild_slot_widgets(self):
         """Rebuild all slot widgets from rack state."""
@@ -659,7 +646,9 @@ class MainWindow(QMainWindow):
         """Add a new plugin (request via REST, wait for WS feedback)."""
         dialog = PluginSelectorDialog(self.rack, self)
         if dialog.exec() == QDialog.Accepted and dialog.selected_uri:
-            label = self.rack.request_add_plugin(dialog.selected_uri)
+            label = self.rack.request_add_plugin_at(
+                dialog.selected_uri, len(self.rack.slots)
+            )
             if label:
                 print(f"Requested add plugin, label={label}")
             else:
@@ -732,19 +721,7 @@ class MainWindow(QMainWindow):
         if event.label == self.selected_label:
             self.controls_panel.set_bypass_silent(event.bypassed)
 
-    def _on_ws_slot_added(self, slot: PluginSlot):
-        """Handle slot added from WebSocket - rebuild UI."""
-        print(f"UI: Slot added: {slot.label}")
-        self._rebuild_slot_widgets()
-        # Select the new slot
-        self._select_slot(slot.label)
-
-    def _on_ws_slot_removed(self, label: str):
-        """Handle slot removed from WebSocket - rebuild UI."""
-        print(f"UI: Slot removed: {label}")
-        self._rebuild_slot_widgets()
-
-    def _on_ws_order_changed(self, order: list):
+    def _on_rack_order_changed(self, order: list):
         """Handle order change from WebSocket - rebuild UI."""
         print(f"UI: Order changed: {order}")
         self._rebuild_slot_widgets()
@@ -776,7 +753,7 @@ def main():
 
     # Create rack (do not force reset on init — build state from WebSocket)
     print("Connecting to MOD server...")
-    rack = Rack(config, prevent_normalization=not args.master)
+    rack = Rack(config)
 
     # Create and run app
     app = QApplication(sys.argv)

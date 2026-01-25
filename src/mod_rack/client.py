@@ -669,7 +669,7 @@ class Client:
         """Завантажити пресет для ефекту"""
         return self._get(f"/effect/preset/load//graph/{label}", uri=preset_uri)
 
-    def effect_position(self, label: str, x: int, y: int):
+    def effect_position(self, label: str, x: float, y: float):
         """Змінити позицію ефекту на UI"""
         # Prefer WebSocket plugin_pos command when available (real-time UI placement)
         try:

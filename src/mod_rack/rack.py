@@ -1,7 +1,7 @@
 from enum import Enum, auto
 import threading
 import time
-from typing import Any, Callable, SupportsIndex
+from typing import Any, Callable, SupportsIndex, TypeAlias
 
 import secrets
 import string
@@ -23,10 +23,13 @@ from mod_rack.plugin import Plugin
 
 
 # Type aliases for callbacks
-OnSlotAddedCallback = Callable[["PluginSlot"], None]  # slot
-OnSlotRemovedCallback = Callable[[str], None]  # label
-OnOrderChangeCallback = Callable[[list[str]], None]  # order (list of labels)
-
+OnRackOrderChangeCallback = Callable[
+    [list["PluginSlot"]], None
+]  # order (list of labels)
+OnRackOrderChangeCallbackRef: TypeAlias = (
+    weakref.ReferenceType[OnRackOrderChangeCallback]
+    | weakref.WeakMethod[OnRackOrderChangeCallback]
+)
 
 __all__ = ["PluginSlot", "HardwareSlot", "Rack", "Orchestrator", "OrchestratorMode"]
 
@@ -140,11 +143,11 @@ class GridLayoutManager:
         Y_THRESHOLD: Maximum Y difference to consider slots in the same row for sorting.
     """
 
-    X_STEP = 600
-    Y_STEP = 600
-    BASE_X = 200
-    BASE_Y = 400
-    Y_THRESHOLD = 150.0
+    X_STEP: float = 600.0
+    Y_STEP: float = 600.0
+    BASE_X: float = 200.0
+    BASE_Y: float = 400.0
+    Y_THRESHOLD: float = 150.0
 
     @classmethod
     def sort_slots(cls, slots: list[PluginSlot]) -> list[PluginSlot]:
@@ -278,7 +281,9 @@ class OrchestratorMode(Enum):
 
 
 class Orchestrator:
-    def __init__(self, config: Config, mode: OrchestratorMode = OrchestratorMode.OBSERVER, *args, **kwargs):
+    def __init__(
+        self, config: Config, mode: OrchestratorMode = OrchestratorMode.OBSERVER
+    ):
         self.mode = mode
         self.config = config
         self.client = Client(config.server.url)
@@ -289,7 +294,7 @@ class Orchestrator:
         self._normalizing = False
 
         # CallBacks
-        self._order_change_listeners: set[Callable[[Any], None]] = set()
+        self._order_change_listeners: set[OnRackOrderChangeCallbackRef] = set()
 
         # Slots and connections cache
         self.input_slot = HardwareSlot(ports=[], is_input=True)
@@ -306,16 +311,21 @@ class Orchestrator:
     @normalizing.setter
     def normalizing(self, value: bool):
         self._normalizing = value
-        # if not value:
-        #     self._reorder_slots_by_pos()
 
     def run(self):
         self.client.ws.connect()
         while True:
             time.sleep(1)
 
-    def on_order_rig_changed(self, cb: Callable[[Any], None]):
-        self._add_listener(self._order_change_listeners, cb)
+    def on_rack_order_changed(self, cb: OnRackOrderChangeCallback):
+        ref: OnRackOrderChangeCallbackRef
+        try:
+            ref = weakref.WeakMethod(cb)
+        except TypeError:
+            ref = weakref.ref(cb)
+
+        with self._lock:
+            self._order_change_listeners.add(ref)
 
     def _subscribe(self):
         # Setup WebSocket callbacks BEFORE connecting so we don't miss initial messages
@@ -327,15 +337,6 @@ class Orchestrator:
         self.client.ws.on(GraphConnectEvent, self._on_graph_connect)
         self.client.ws.on(GraphDisconnectEvent, self._on_graph_disconnect)
         self.client.ws.on(GraphPluginPosEvent, self._on_position_change)
-
-    def _add_listener(self, listeners_set, cb):
-        try:
-            ref = weakref.WeakMethod(cb)
-        except TypeError:
-            ref = weakref.ref(cb)
-
-        with self._lock:
-            listeners_set.add(ref)
 
     def _on_loading_start(self, event: LoadingStartEvent):
         with self._lock:
@@ -351,7 +352,7 @@ class Orchestrator:
         with self._lock:
             self._loading = False
         if not self._loading:
-            self._reorder_slots_by_pos()
+            self._reorder_slots_by_pos(force_emit=True)
 
     def _on_graph_hw_port_add(self, event: GraphAddHwPortEvent):
         """
@@ -379,7 +380,7 @@ class Orchestrator:
         _Color.blue(f"+ Plugin: {event.label}")
 
         # Перевіряємо чи такий слот вже існує
-        slot = self._find_slot_by_label(event.label)
+        slot = self.get_slot_by_label(event.label)
         if not slot:
             # Just update position
             plugin = Plugin.load_supported(
@@ -405,7 +406,7 @@ class Orchestrator:
             self.slots.append(slot)
 
         if not self._loading:
-            self._reorder_slots_by_pos(force=True)
+            self._reorder_slots_by_pos(force_emit=True)
 
     def _on_graph_plugin_remove(self, event: GraphPluginRemoveEvent):
         """
@@ -414,7 +415,7 @@ class Orchestrator:
         """
         _Color.red(f"- Plugin: {event.label}")
 
-        slot = self._find_slot_by_label(event.label)
+        slot = self.get_slot_by_label(event.label)
         if not slot:
             return
 
@@ -423,7 +424,7 @@ class Orchestrator:
             print(f"  Removed slot: {event.label}")
 
         if not self._loading:
-            self._reorder_slots_by_pos()
+            self._reorder_slots_by_pos(force_emit=True)
 
     def _on_graph_connect(self, event: GraphConnectEvent):
         _Color.blue(f"\u221e Connected: {event.src_path} \u21e2 {event.dst_path}")
@@ -447,7 +448,7 @@ class Orchestrator:
         Updates slot position and reorders slots based on new coordinates.
         """
         # Skip position updates during normalization (we're sending, not receiving)
-        slot = self._find_slot_by_label(event.label)
+        slot = self.get_slot_by_label(event.label)
         if not slot:
             return
 
@@ -465,7 +466,7 @@ class Orchestrator:
     def _normalize(self, /, force: bool = False):
         if self._loading:
             return
-        
+
         if self.mode == OrchestratorMode.OBSERVER and not force:
             return
 
@@ -485,14 +486,14 @@ class Orchestrator:
                     time.sleep(0.1)
                     self.client.effect_position(slot.label, x, y)
         except Exception as err:
-            self._red(f"\u21bb Normalizing: error occured: {err}")
+            _Color.red(f"\u21bb Normalizing: error occured: {err}")
         finally:
             # Debounce delay
             time.sleep(0.4)
             with self._lock:
                 self.normalizing = False
 
-    def _reorder_slots_by_pos(self, /, force=False):
+    def _reorder_slots_by_pos(self, /, force_emit=False):
         with self._lock:
             # sort slots by pos
             old_order = [s.label for s in self.slots]
@@ -504,19 +505,23 @@ class Orchestrator:
 
         with self._lock:
             # check order changed
-            if old_order != new_order or force:
-                _Color.info("\u21c5 Slots order changed")
-                # then if order was changed process callbacks
-                dead: set[Callable[[Any], None]] = set()
+            if old_order != new_order or force_emit:
+                self._order_changed_emit()
 
-                for ref in self._order_change_listeners:
-                    cb = ref()
-                    if cb is None:
-                        dead.add(ref)
-                    else:
-                        cb(None)
+    def _order_changed_emit(self):
+        _Color.info("\u21c5 Slots order changed")
+        # then if order was changed process callbacks
+        dead = set()
 
-    def _find_slot_by_label(self, label: str) -> PluginSlot | None:
+        for ref in self._order_change_listeners:
+            cb = ref()
+            print("CB", cb)
+            if cb is None:
+                dead.add(ref)
+            else:
+                cb(self.slots)
+
+    def get_slot_by_label(self, label: str) -> PluginSlot | None:
         """Find slot by its plugin label."""
         for slot in self.slots:
             if slot.label == label:
@@ -524,7 +529,7 @@ class Orchestrator:
         return None
 
 
-class Rack:
+class Rack(Orchestrator):
     """
     Rig — ланцюг ефектів: Input -> [Slot 0] -> [Slot 1] -> ... -> Output
 
@@ -534,167 +539,28 @@ class Rack:
     - WS handlers: _on_plugin_added(), _on_plugin_removed()
     """
 
-    def __init__(
-        self, config: Config, client: Client | None = None, prevent_normalization=False
-    ):
-        self.config = config
-        # If caller did not provide a Client, create one but delay WebSocket
-        # connection until after callbacks are installed to avoid missing messages.
-        if client is None:
-            self.client = Client(config.server.url)
-        else:
-            self.client = client
-
-        self._lock = threading.RLock()
-
-        self._prevent_normalization = prevent_normalization
-
-        self.input_slot = HardwareSlot(ports=[], is_input=True)
-        self.output_slot = HardwareSlot(ports=[], is_input=False)
-
-        # Slots list - порядок визначається по координатах (x, y)
-        self.slots: list[PluginSlot] = []
-
-        # Кеш активних з'єднань на сервері: {(src_port, dst_port), ...}
-        self._connections: set[tuple[str, str]] = set()
-
-        # Flag to defer reconnections during initial pedalboard loading
-        self._loading = True
-
-        # External callbacks (for UI)
-        self._ext_on_slot_added: OnSlotAddedCallback | None = None
-        self._ext_on_slot_removed: OnSlotRemovedCallback | None = None
-        self._ext_on_order_change: OnOrderChangeCallback | None = None
-
-        self._subscribe()
-        self.client.ws.connect()
-
-    def _subscribe(self):
-        # Setup WebSocket callbacks BEFORE connecting so we don't miss initial messages
-        self.client.ws.on(LoadingStartEvent, self._on_loading_start)
-        self.client.ws.on(GraphAddHwPortEvent, self._on_graph_hw_port_add)
-        self.client.ws.on(GraphPluginAddEvent, self._on_graph_plugin_add)
-        self.client.ws.on(GraphPluginRemoveEvent, self._on_graph_plugin_remove)
-        self.client.ws.on(GraphConnectEvent, self._on_graph_connect)
-        self.client.ws.on(GraphDisconnectEvent, self._on_graph_disconnect)
-        self.client.ws.on(GraphPluginPosEvent, self._on_position_change)
-        self.client.ws.on(LoadingEndEvent, self._on_loading_end)
-
-    def _on_loading_start(self, event: LoadingStartEvent):
-        self._loading = True
-        self.slots = []
-        self._connections.clear()
+    def __init__(self, config: Config, client: Client | None = None):
+        super().__init__(config=config, mode=OrchestratorMode.MANAGER)
 
     def _on_loading_end(self, event: LoadingEndEvent):
-        self._loading = False
-
-        # Використовуємо LayoutManager
-        new_positions = GridLayoutManager.normalize(self.slots)
-        for slot, (x, y) in new_positions.items():
-            slot.pos_x = x
-            slot.pos_y = y
-            self.client.effect_position(slot.label, x, y)
-
+        super()._on_loading_end(event)
         self.reconnect_seamless()
 
     def _on_graph_hw_port_add(self, event: GraphAddHwPortEvent):
-        hw_config = self.config.hardware
-
-        if event.is_output:
-            slot = self.output_slot
-        else:
-            slot = self.input_slot
-
-        if event.name not in hw_config.disable_ports:
-            if event.name not in slot._ports:
-                slot._ports.append(event.name)
-
-    def _on_graph_connect(self, event: GraphConnectEvent):
+        super()._on_graph_hw_port_add(event)
         with self._lock:
-            pair = (event.src_path, event.dst_path)
-            if pair not in self._connections:
-                self._connections.add(pair)
-                print(f"  [Cache] Connected: {event.src_path} -> {event.dst_path}")
-
-    def _on_graph_disconnect(self, event: GraphDisconnectEvent):
-        with self._lock:
-            pair = (event.src_path, event.dst_path)
-            self._connections.discard(pair)
-            print(f"  [Cache] Disconnected: {event.src_path} -> {event.dst_path}")
-
-    def set_callbacks(
-        self,
-        on_slot_added: OnSlotAddedCallback | None = None,
-        on_slot_removed: OnSlotRemovedCallback | None = None,
-        on_order_change: OnOrderChangeCallback | None = None,
-    ):
-        """Set external callbacks for UI updates."""
-        self._ext_on_slot_added = on_slot_added
-        self._ext_on_slot_removed = on_slot_removed
-        self._ext_on_order_change = on_order_change
-
-    # =========================================================================
-    # WebSocket event handlers (Server-as-Source-of-Truth)
-    # =========================================================================
-
-    def _find_slot_by_label(self, label: str) -> PluginSlot | None:
-        """Find slot by its plugin label."""
-        for slot in self.slots:
-            if slot.label == label:
-                return slot
-        return None
-
-    def _find_plugin_by_label(self, label: str) -> Plugin | None:
-        """Find plugin by its label."""
-        slot = self._find_slot_by_label(label)
-        return slot.plugin if slot else None
+            if not self._loading:
+                self.reconnect_seamless()
 
     def _on_position_change(self, event: GraphPluginPosEvent):
-        """Handle position change from WebSocket.
-
+        """
+        Handle position change from WebSocket.
         Updates slot position and reorders slots based on new coordinates.
         """
-        # Skip position updates during normalization (we're sending, not receiving)
+        super()._on_position_change(event)
         with self._lock:
-            slot = self._find_slot_by_label(event.label)
-            if not slot:
-                print(f"  Position change for unknown slot {event.label}, ignoring")
-                return
-
-            # NOTE: we should ensure that plugin already got an update
-            slot.pos_x = event.x
-            slot.pos_y = event.y
-
-            # Skip reordering during initialization
-            if self._loading:
-                return
-
-            # Reorder slots based on new positions and reconnect if order changed
-            self._reorder_by_layout()
-
-    def _reorder_by_layout(self):
-        old_order = [s.label for s in self.slots]
-        self.slots = GridLayoutManager.sort_slots(self.slots)
-        new_order = [s.label for s in self.slots]
-
-        if old_order != new_order:
-            self.reconnect_seamless()
-            if self._ext_on_order_change:
-                self._ext_on_order_change(new_order)
-
-        self._apply_normalization()
-
-    def _apply_normalization(self):
-        if self._prevent_normalization:
-            return
-
-        with self._lock:
-            updates = GridLayoutManager.normalize(self.slots)
-            for slot, (x, y) in updates.items():
-                if abs(slot.pos_x - x) > 10 or abs(slot.pos_y - y) > 10:
-                    slot.pos_x = x
-                    slot.pos_y = y
-                    self.client.effect_position(slot.label, x, y)
+            if not self._loading:
+                self.reconnect_seamless()
 
     def _on_graph_plugin_add(self, event: GraphPluginAddEvent):
         """
@@ -702,51 +568,9 @@ class Rack:
 
         Creates Slot, fetches port info, connects to chain.
         """
-        # Перевіряємо чи такий слот вже існує
-        slot = self._find_slot_by_label(event.label)
-        if not slot:
-            # Just update position
-            plugin = Plugin.load_supported(
-                self.client,
-                uri=event.uri,
-                label=event.label,
-                config=self.config,
-            )
-
-            if not plugin:
-                print(f"Can not load plugin: {event.label}, {event.uri}")
-                return
-
-            # Створюємо слот
-            slot = PluginSlot(
-                plugin,
-                event.x if event.x is not None else 0,
-                event.y if event.y is not None else 0,
-            )
-
+        super()._on_graph_plugin_add(event)
         with self._lock:
-            # Додаємо слот
-            self.slots.append(slot)
-
-            print(
-                f"  Created slot: {slot} at index {self.slots.index(slot)} (pos: {event.x}, {event.y})"
-            )
-
-            # Сортуємо
-            self.slots = GridLayoutManager.sort_slots(self.slots)
-
-            # Сповіщуємо UI
-            if self._ext_on_slot_added:
-                self._ext_on_slot_added(slot)
-
-            # Нормалізуємо тільки після завантаження
             if not self._loading:
-                new_positions = GridLayoutManager.normalize(self.slots)
-                for slot, (x, y) in new_positions.items():
-                    slot.pos_x = x
-                    slot.pos_y = y
-                    self.client.effect_position(slot.label, x, y)
-                # Connect into chain UNLESS we're still initializing
                 self.reconnect_seamless()
 
     def _on_graph_plugin_remove(self, event: GraphPluginRemoveEvent):
@@ -755,26 +579,10 @@ class Rack:
 
         Updates local graph state ONLY.
         """
-        slot = self._find_slot_by_label(event.label)
-        if not slot:
-            print(f"  Slot {event.label} not found, skipping")
-            return
-
+        super()._on_graph_plugin_remove(event)
         with self._lock:
-            self.slots.remove(slot)
-            print(f"  Removed slot: {event.label}")
-
-        # Normalize remaining positions to fill the gap
-        if not self._loading:
-            new_positions = GridLayoutManager.normalize(self.slots)
-            for slot, (x, y) in new_positions.items():
-                slot.pos_x = x
-                slot.pos_y = y
-                self.client.effect_position(slot.label, x, y)
-
-        # Notify UI
-        if self._ext_on_slot_removed:
-            self._ext_on_slot_removed(event.label)
+            if not self._loading:
+                self.reconnect_seamless()
 
     # =========================================================================
     # Request API (ініціювання без локальних змін)
@@ -852,7 +660,7 @@ class Rack:
         Returns:
             True if remove requested successfully, False otherwise
         """
-        slot = self._find_slot_by_label(label)
+        slot = self.get_slot_by_label(label)
         if not slot:
             print(f"Plugin {label} not found locally, cannot remove")
             return False
@@ -915,10 +723,6 @@ class Rack:
             slot.pos_x = x
             slot.pos_y = y
             self.client.effect_position(slot.label, x, y)
-
-        # Notify UI
-        if self._ext_on_order_change:
-            self._ext_on_order_change([s.label for s in self.slots])
 
     # =========================================================================
     # Routing
@@ -1100,9 +904,10 @@ class Rack:
     def __len__(self) -> int:
         return len(self.slots)
 
-    def get_slot_by_label(self, label: str) -> PluginSlot | None:
-        """Find slot by label."""
-        return self._find_slot_by_label(label)
+    def get_plugin_by_label(self, label: str) -> Plugin | None:
+        """Find plugin by its label."""
+        slot = self.get_slot_by_label(label)
+        return slot.plugin if slot else None
 
     def list_supported_plugins(self) -> list[PluginConfig]:
         """List plugins from config."""
