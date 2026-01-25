@@ -249,7 +249,6 @@ class EventMonitor:
 
         # CallBacks
         self._order_change_listeners: set[Callable[[Any], None]] = set()
-        self._pos_change_listeners: set[Callable[[Any], None]] = set()
 
         # Slots and connections cache
         self.input_slot = HardwareSlot(ports=[], is_input=True)
@@ -278,9 +277,6 @@ class EventMonitor:
 
     def on_order_rig_changed(self, cb: Callable[[Any], None]):
         self._add_listener(self._order_change_listeners, cb)
-
-    def on_pos_change_listeners(self, cb: Callable[[Any], None]):
-        self._add_listener(self._pos_change_listeners, cb)
 
     def _subscribe(self):
         # Setup WebSocket callbacks BEFORE connecting so we don't miss initial messages
