@@ -209,6 +209,38 @@ class GridLayoutManager:
                     rows.append(current_row)
         return rows
 
+    def get_insertion_coords(
+        self, slots: list[PluginSlot], index: int | None = None
+    ) -> tuple[float, float]:
+        """
+        Розраховує координати (x, y) для нового або переміщеного слота
+        на основі його майбутнього індексу в загальному списку.
+
+        Args:
+            slots: Поточні слоти.
+            index: Позиція, в яку ми хочемо вставити плагін.
+                   None означає вставку в самий кінець.
+        """
+        # 1. Отримуємо поточний відсортований порядок
+        ordered_slots = self.sort_slots(slots)
+
+        # 2. Визначаємо фінальний індекс
+        if index is None or index >= len(ordered_slots):
+            target_idx = len(ordered_slots)
+        else:
+            target_idx = max(0, index)
+
+        # 3. Розраховуємо row та col на основі max_per_row
+        # Оскільки normalize використовує idx // max_per_row,
+        # ми маємо дотримуватись цієї ж логіки для передбачуваності.
+        row = target_idx // self.max_per_row
+        col = target_idx % self.max_per_row
+
+        x = self.base_x + col * self.x_step
+        y = self.base_y + row * self.y_step
+
+        return (float(x), float(y))
+
 
 # =============================================================================
 # Rack
