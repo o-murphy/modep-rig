@@ -308,6 +308,7 @@ class EventMonitor:
                 _Color.red("\u25a0 Reloading detected")
             _Color.yellow("\u25f7 Loading start, initializing...")
             self._loading = True
+            self._normalizing = False
             self._connections.clear()
 
     def _on_loading_end(self, event: LoadingEndEvent):
@@ -436,19 +437,23 @@ class EventMonitor:
 
         self.normalizing = True
 
-        for slot, (x, y) in new_positions.items():
-            old_pos = (slot.pos_x, slot.pos_y)
-            _Color.yellow(f"\u21bb Normalizing: {old_pos} -> {(x, y)}")
-            if slot.is_pos_changed((x, y)):
-                slot.pos_x = x
-                slot.pos_y = y
-                # Need small delay before server be able to react
-                time.sleep(0.1)
-                self.client.effect_position(slot.label, x, y)
-
-        time.sleep(0.1)
-        self.normalizing = False
-
+        try:
+            for slot, (x, y) in new_positions.items():
+                old_pos = (slot.pos_x, slot.pos_y)
+                _Color.yellow(f"\u21bb Normalizing: {old_pos} -> {(x, y)}")
+                if slot.is_pos_changed((x, y)):
+                    slot.pos_x = x
+                    slot.pos_y = y
+                    # Need small delay before server be able to react
+                    time.sleep(0.1)
+                    self.client.effect_position(slot.label, x, y)
+        except Exception as err:
+            self._red(f"\u21bb Normalizing: error occured: {err}")
+        finally:
+            # Debounce delay
+            time.sleep(0.4)
+            with self._lock:
+                self.normalizing = False
 
     def _reorder_slots_by_pos(self, /, force=False):
         with self._lock:
@@ -457,9 +462,10 @@ class EventMonitor:
             self.slots = self._layout_manager.sort_slots(self.slots)
             new_order = [s.label for s in self.slots]
 
-            # then normalize
-            self._normalize()
+        # then normalize
+        self._normalize()
 
+        with self._lock:
             # check order changed
             if old_order != new_order or force:
                 _Color.info("\u21c5 Slots order changed")
