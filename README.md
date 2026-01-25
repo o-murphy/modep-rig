@@ -1,4 +1,4 @@
-# modep-rig
+# mod-rack
 
 Python client for MODEP/MOD-UI audio plugin host.
 
@@ -12,18 +12,18 @@ Python client for MODEP/MOD-UI audio plugin host.
 
 ## Architecture
 
-The rig uses a **reactive architecture** where the server is the source of truth:
+The rack uses a **reactive architecture** where the server is the source of truth:
 
 ```
 Client wants to add plugin:
-  rig.request_add_plugin(uri) → REST request
+  rack.request_add_plugin(uri) → REST request
     ├─ OK: do nothing, wait for WS feedback
     └─ ERROR: signal error to UI
   ...
   WS: "add /graph/label ..." → _on_plugin_added() → Slot created, connected
 
 Client wants to remove plugin:
-  rig.request_remove_plugin(label) → REST request
+  rack.request_remove_plugin(label) → REST request
     ├─ OK: do nothing, wait for WS feedback
     └─ ERROR: signal error to UI
   ...
@@ -55,7 +55,7 @@ url = "http://127.0.0.1:18181/"
 # inputs = ["capture_1", "capture_2"]   # Hardware inputs (from audio interface)
 # outputs = ["playback_1", "playback_2"] # Hardware outputs (to audio interface)
 
-[rig]
+[rack]
 slots_limit = 8             # Max slots allowed (optional, default: unlimited)
 
 # Supported plugins (whitelist)
@@ -82,7 +82,7 @@ This is useful for:
 
 ### Audio Routing
 
-Rig automatically connects plugins in a chain: `Input -> [Slot 0] -> [Slot 1] -> ... -> Output`
+Rack automatically connects plugins in a chain: `Input -> [Slot 0] -> [Slot 1] -> ... -> Output`
 
 Default routing logic (index-based pairing):
 - `mono -> mono`: `out[0] -> in[0]`
@@ -138,38 +138,34 @@ This is useful for:
 ## Usage
 
 ```python
-from modep_rig import Config, Rig
+from mod_rack import Config, Rack
 
 config = Config.load("config.toml")
-rig = Rig(config)
+rack = Rack(config)
 
 # Request to add plugin (async - waits for WS feedback)
-label = rig.request_add_plugin("http://moddevices.com/plugins/mod-devel/DS1")
+label = rack.request_add_plugin("http://moddevices.com/plugins/mod-devel/DS1")
 
 # Request to remove plugin
-rig.request_remove_plugin(label)
+rack.request_remove_plugin(label)
 
 # Access plugin controls (after slot is created via WS feedback)
-slot = rig.get_slot_by_label(label)
+slot = rack.get_slot_by_label(label)
 if slot:
     plugin = slot.plugin
-    plugin.set_control("gain", 0.5)
+    plugin.param_set("gain", 0.5)
     plugin.bypass(True)
 
 # Reorder slots (client-controlled)
-rig.move_slot(from_idx=0, to_idx=2)
-
-# Save/load presets
-rig.save_preset("my_preset.json")
-rig.load_preset("my_preset.json")
+rack.move_slot(from_idx=0, to_idx=2)
 
 # Clear all plugins
-rig.clear()
+rack.clear()
 ```
 
 ## UI Controls
 
-The `rig_ui.py` GUI provides intuitive controls:
+The `qrack.py` GUI provides intuitive controls:
 
 - **Slot Widgets**: Visual representation of each plugin in the chain
   - **Right-click context menu**:
@@ -184,10 +180,10 @@ The `rig_ui.py` GUI provides intuitive controls:
 
 ## WebSocket Callbacks
 
-The rig provides callbacks for UI integration:
+The rack provides callbacks for UI integration:
 
 ```python
-rig.set_callbacks(
+rack.set_callbacks(
     on_param_change=lambda label, symbol, value: ...,
     on_bypass_change=lambda label, bypassed: ...,
     on_slot_added=lambda slot: ...,
@@ -205,16 +201,14 @@ rig.set_callbacks(
 - `config.get_plugin_by_name(name)` - Get PluginConfig by name
 - `config.get_plugins_by_category(category)` - List plugins by category
 
-### Rig
+### Rack
 
-- `rig.request_add_plugin(uri)` - Request to add plugin (returns label or None)
-- `rig.request_remove_plugin(label)` - Request to remove plugin (returns bool)
-- `rig.move_slot(from_idx, to_idx)` - Reorder slots in chain
-- `rig.get_slot_by_label(label)` - Find slot by label
-- `rig.clear()` - Request removal of all plugins
-- `rig.save_preset(path)` - Save rig state to JSON
-- `rig.load_preset(path)` - Load rig state from JSON
-- `rig.set_callbacks(...)` - Set UI callbacks
+- `rack.request_add_plugin(uri)` - Request to add plugin (returns label or None)
+- `rack.request_remove_plugin(label)` - Request to remove plugin (returns bool)
+- `rack.move_slot(from_idx, to_idx)` - Reorder slots in chain
+- `rack.get_slot_by_label(label)` - Find slot by label
+- `rack.clear()` - Request removal of all plugins
+- `rack.set_callbacks(...)` - Set UI callbacks
 
 ### Slot
 

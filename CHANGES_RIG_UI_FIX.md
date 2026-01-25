@@ -1,17 +1,17 @@
-# Changes Made to Fix rig_ui Integration
+# Changes Made to Fix qrack Integration
 
 ## Problem
-New make-before-break logic wasn't working with rig_ui.py - full board rebuild was still happening and old routes weren't being disconnected.
+New make-before-break logic wasn't working with qrack.py - full board rebuild was still happening and old routes weren't being disconnected.
 
 ## Root Causes
-1. **rig_ui.py `_on_add_slot()`** - Called `self.rig.reconnect()` after adding slot
+1. **qrack.py `_on_add_slot()`** - Called `self.rack.reconnect()` after adding slot
 2. **`_reconnect_slot()` missing decorator** - Wasn't suppressing structural callbacks
 3. **Wrong order of operations** - Was disconnecting old before connecting new
 4. **Missing `_disconnect_pair()` method** - Couldn't disconnect specific route pairs
 
 ## Changes Made
 
-### 1. rig.py - `_reconnect_slot()` Algorithm (Line 663)
+### 1. rack.py - `_reconnect_slot()` Algorithm (Line 663)
 **Make-Before-Break Implementation:**
 ```python
 # Old broken order:
@@ -30,7 +30,7 @@ disconnect_old_path()        # Then remove old (no interruption!)
 - Step 1: Connect new slot to chain (src → slot → dst)
 - Step 2: Disconnect old path (src → dst)
 
-### 2. rig.py - New Method `_disconnect_pair()` (Line 750)
+### 2. rack.py - New Method `_disconnect_pair()` (Line 750)
 Disconnects specific source → destination connections:
 ```python
 def _disconnect_pair(self, src: Slot, dst: Slot):
@@ -39,20 +39,20 @@ def _disconnect_pair(self, src: Slot, dst: Slot):
     # Disconnect all port combinations
 ```
 
-### 3. rig_ui.py - Line 595-597
+### 3. qrack.py - Line 595-597
 **Before:**
 ```python
 slot.load(dialog.selected_uri)
-self.rig.reconnect()
+self.rack.reconnect()
 ```
 
 **After:**
 ```python
 slot.load(dialog.selected_uri)
-self.rig._reconnect_slot(slot)
+self.rack._reconnect_slot(slot)
 ```
 
-### 4. rig.py - `remove_slot()` 
+### 4. rack.py - `remove_slot()` 
 Uses `unload()` which implements make-before-break.
 
 ## Result

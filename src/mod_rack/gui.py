@@ -1,12 +1,15 @@
 """
-PySide6 UI for MODEP Rig control.
+PySide6 UI for MODEP Rack control.
 
-Run with: python rig_ui.py
+Run with: python qrack.py
 """
 
 import signal
 import sys
 from pathlib import Path
+
+from mod_rack.client import GraphParamSetBypassEvent, GraphParamSetEvent
+from mod_rack.plugin import Plugin
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
@@ -32,20 +35,10 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QMenu,
 )
-from PySide6.QtCore import Qt, Signal, QTimer, QObject
+from PySide6.QtCore import Qt, Signal, QTimer
 
-from modep_rig import Config, Rig, ControlPort
-from modep_rig.rig import Slot
-
-
-class RigSignals(QObject):
-    """Qt signals for Rig WebSocket events."""
-
-    param_changed = Signal(str, str, float)  # label, symbol, value
-    bypass_changed = Signal(str, bool)  # label, bypassed
-    slot_added = Signal(object)  # slot
-    slot_removed = Signal(str)  # label
-    order_changed = Signal(list)  # order (list of labels)
+from mod_rack import Config, Rack, ControlPort
+from mod_rack.rack import OrchestratorMode
 
 
 class ControlWidget(QWidget):
@@ -56,13 +49,12 @@ class ControlWidget(QWidget):
     def __init__(self, control: ControlPort, parent=None):
         super().__init__(parent)
         self.control = control
-        self._updating = False
 
     def set_value_silent(self, value: float):
         """Set value without emitting signal."""
-        self._updating = True
+        self.blockSignals(True)
         self._set_widget_value(value)
-        self._updating = False
+        self.blockSignals(False)
 
     def _set_widget_value(self, value: float):
         """Override in subclass."""
@@ -70,8 +62,7 @@ class ControlWidget(QWidget):
 
     def _emit_change(self, value: float):
         """Emit value change if not updating."""
-        if not self._updating:
-            self.value_changed.emit(self.control.symbol, value)
+        self.value_changed.emit(self.control.symbol, value)
 
 
 class KnobControl(ControlWidget):
@@ -87,7 +78,7 @@ class KnobControl(ControlWidget):
 
         # Label
         self.label = QLabel(control.name)
-        self.label.setAlignment(Qt.AlignCenter)
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.label)
 
         # Dial
@@ -102,7 +93,7 @@ class KnobControl(ControlWidget):
 
         # Value display
         self.value_label = QLabel(control.format_value())
-        self.value_label.setAlignment(Qt.AlignCenter)
+        self.value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.value_label)
 
     def _value_to_slider(self, value: float) -> int:
@@ -117,14 +108,12 @@ class KnobControl(ControlWidget):
 
     def _on_slider_changed(self, pos: int):
         value = self._slider_to_value(pos)
-        self.control.value = value
-        self.value_label.setText(self.control.format_value())
+        self.value_label.setText(self.control.format_value(value))
         self._emit_change(value)
 
     def _set_widget_value(self, value: float):
-        self.control.value = value
         self.dial.setValue(self._value_to_slider(value))
-        self.value_label.setText(self.control.format_value())
+        self.value_label.setText(self.control.format_value(value))
 
 
 class ToggleControl(ControlWidget):
@@ -147,7 +136,6 @@ class ToggleControl(ControlWidget):
         self._emit_change(value)
 
     def _set_widget_value(self, value: float):
-        self.control.value = value
         self.checkbox.setChecked(value >= 0.5)
 
 
@@ -190,7 +178,6 @@ class EnumControl(ControlWidget):
             self._emit_change(value)
 
     def _set_widget_value(self, value: float):
-        self.control.value = value
         idx = self._value_to_index(value)
         if idx >= 0:
             self.combo.setCurrentIndex(idx)
@@ -207,7 +194,7 @@ class IntegerControl(ControlWidget):
 
         # Label
         self.label = QLabel(control.name)
-        self.label.setAlignment(Qt.AlignCenter)
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.label)
 
         # Slider with integer steps
@@ -220,18 +207,16 @@ class IntegerControl(ControlWidget):
 
         # Value display
         self.value_label = QLabel(control.format_value())
-        self.value_label.setAlignment(Qt.AlignCenter)
+        self.value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.value_label)
 
     def _on_slider_changed(self, value: int):
-        self.control.value = float(value)
-        self.value_label.setText(self.control.format_value())
+        self.value_label.setText(self.control.format_value(value))
         self._emit_change(float(value))
 
     def _set_widget_value(self, value: float):
-        self.control.value = value
         self.slider.setValue(int(value))
-        self.value_label.setText(self.control.format_value())
+        self.value_label.setText(self.control.format_value(value))
 
 
 def create_control_widget(control: ControlPort, parent=None) -> ControlWidget:
@@ -248,7 +233,7 @@ def create_control_widget(control: ControlPort, parent=None) -> ControlWidget:
 class PluginSelectorDialog(QDialog):
     """Dialog to select a plugin from available effects."""
 
-    def __init__(self, rig: Rig, parent=None):
+    def __init__(self, rack: Rack, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Select Plugin")
         self.setMinimumSize(400, 500)
@@ -260,20 +245,22 @@ class PluginSelectorDialog(QDialog):
         # Plugin list - show only whitelisted plugins
         self.list_widget = QListWidget()
 
-        for p_config in rig.config.plugins:
+        for p_config in rack.config.plugins:
             name = p_config.name
             uri = p_config.uri
             category = p_config.category or "General"
 
             item = QListWidgetItem(f"{name}\n  [{category}]")
-            item.setData(Qt.UserRole, uri)
+            item.setData(Qt.ItemDataRole.UserRole, uri)
             self.list_widget.addItem(item)
 
         self.list_widget.itemDoubleClicked.connect(self._on_double_click)
         layout.addWidget(self.list_widget)
 
         # Buttons
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -290,7 +277,7 @@ class PluginSelectorDialog(QDialog):
 
 
 class SlotWidget(QFrame):
-    """Widget representing a single slot in the rig."""
+    """Widget representing a single slot in the rack."""
 
     clicked = Signal(str)  # label
     remove_requested = Signal(str)  # label
@@ -303,11 +290,11 @@ class SlotWidget(QFrame):
         self.index = index
         self.is_selected = False
 
-        self.setFrameStyle(QFrame.Box | QFrame.Raised)
+        self.setFrameStyle(QFrame.Shape.Box | QFrame.Shadow.Raised)
         self.setLineWidth(2)
-        self.setCursor(Qt.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMinimumSize(120, 80)
-        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
         self.setAcceptDrops(True)
         self._drag_start_pos = None
@@ -316,12 +303,12 @@ class SlotWidget(QFrame):
 
         # Slot number
         self.slot_num_label = QLabel(f"Slot {index}")
-        self.slot_num_label.setAlignment(Qt.AlignCenter)
+        self.slot_num_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.slot_num_label)
 
         # Plugin name
         self.plugin_label = QLabel(plugin_name)
-        self.plugin_label.setAlignment(Qt.AlignCenter)
+        self.plugin_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.plugin_label.setWordWrap(True)
         layout.addWidget(self.plugin_label)
 
@@ -430,20 +417,19 @@ class ControlsPanel(QScrollArea):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         self.container = QWidget()
-        self.layout = QVBoxLayout(self.container)
-        self.layout.setAlignment(Qt.AlignTop)
+        self._layout = QVBoxLayout(self.container)
+        self._layout.setAlignment(Qt.AlignTop)
         self.setWidget(self.container)
 
-        self.plugin = None
+        self.plugin: Plugin | None = None
         self.current_label: str | None = None
         self.control_widgets: dict[str, ControlWidget] = {}
         self.bypass_checkbox: QCheckBox | None = None
-        self._updating_bypass = False
 
         # Placeholder
         self.placeholder = QLabel("Select a plugin to see controls")
         self.placeholder.setAlignment(Qt.AlignCenter)
-        self.layout.addWidget(self.placeholder)
+        self._layout.addWidget(self.placeholder)
 
     def set_plugin(self, plugin, label: str | None = None):
         """Set the plugin to display controls for."""
@@ -473,12 +459,12 @@ class ControlsPanel(QScrollArea):
 
         header.addStretch()
 
-        self.layout.addLayout(header)
+        self._layout.addLayout(header)
 
         # Separator
         line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        self.layout.addWidget(line)
+        line.setFrameShape(QFrame.Shape.HLine)
+        self._layout.addWidget(line)
 
         # Controls grid
         controls_group = QGroupBox("Controls")
@@ -487,8 +473,8 @@ class ControlsPanel(QScrollArea):
         row, col = 0, 0
         max_cols = 3
 
-        for symbol in plugin.controls:
-            control = plugin.controls[symbol]
+        for symbol in plugin:
+            control = plugin[symbol]
             widget = create_control_widget(control)
             widget.value_changed.connect(self._on_control_changed)
             self.control_widgets[symbol] = widget
@@ -499,8 +485,8 @@ class ControlsPanel(QScrollArea):
                 col = 0
                 row += 1
 
-        self.layout.addWidget(controls_group)
-        self.layout.addStretch()
+        self._layout.addWidget(controls_group)
+        self._layout.addStretch()
 
     def _clear_controls(self):
         """Remove all control widgets."""
@@ -510,14 +496,14 @@ class ControlsPanel(QScrollArea):
         self.bypass_checkbox = None
 
         # Clear layout
-        while self.layout.count():
-            item = self.layout.takeAt(0)
+        while self._layout.count():
+            item = self._layout.takeAt(0)
             if item.widget() and item.widget() != self.placeholder:
                 item.widget().deleteLater()
             elif item.layout():
                 self._clear_layout(item.layout())
 
-        self.layout.addWidget(self.placeholder)
+        self._layout.addWidget(self.placeholder)
 
     def _clear_layout(self, layout):
         while layout.count():
@@ -530,19 +516,17 @@ class ControlsPanel(QScrollArea):
     def _on_control_changed(self, symbol: str, value: float):
         """Handle control value change."""
         if self.plugin:
-            self.plugin[symbol] = value
+            self.plugin.param_set(symbol, value)
 
     def set_bypass_silent(self, bypassed: bool):
         """Set bypass checkbox without emitting signal."""
         if self.bypass_checkbox:
-            self._updating_bypass = True
+            self.blockSignals(True)
             self.bypass_checkbox.setChecked(bypassed)
-            self._updating_bypass = False
+            self.blockSignals(False)
 
     def _on_bypass_changed(self, state):
         """Handle bypass checkbox change."""
-        if self._updating_bypass:
-            return
         if self.plugin:
             self.plugin.bypass(state)
 
@@ -550,33 +534,20 @@ class ControlsPanel(QScrollArea):
 class MainWindow(QMainWindow):
     """Main application window."""
 
-    def __init__(self, rig: Rig):
+    order_changed_signal = Signal(list)
+
+    def __init__(self, rack: Rack):
         super().__init__()
-        self.rig = rig
+        self.rack = rack
         self.selected_label: str | None = None
 
-        # Setup signals for thread-safe UI updates
-        self.rig_signals = RigSignals()
-        self.rig_signals.param_changed.connect(self._on_ws_param_changed)
-        self.rig_signals.bypass_changed.connect(self._on_ws_bypass_changed)
-        self.rig_signals.slot_added.connect(self._on_ws_slot_added)
-        self.rig_signals.slot_removed.connect(self._on_ws_slot_removed)
-        self.rig_signals.order_changed.connect(self._on_ws_order_changed)
+        # Connect rack callbacks to emit signals
+        self.order_changed_signal.connect(self._rebuild_slot_widgets)
+        self.rack.on_rack_order_changed(self._handle_rack_cb)
+        self.rack.client.ws.on(GraphParamSetBypassEvent, self._on_ws_bypass_changed)
+        self.rack.client.ws.on(GraphParamSetEvent, self._on_ws_param_changed)
 
-        # Connect rig callbacks to emit signals
-        self.rig.set_callbacks(
-            on_param_change=lambda label, sym, val: self.rig_signals.param_changed.emit(
-                label, sym, val
-            ),
-            on_bypass_change=lambda label, bp: self.rig_signals.bypass_changed.emit(
-                label, bp
-            ),
-            on_slot_added=lambda slot: self.rig_signals.slot_added.emit(slot),
-            on_slot_removed=lambda label: self.rig_signals.slot_removed.emit(label),
-            on_order_change=lambda order: self.rig_signals.order_changed.emit(order),
-        )
-
-        self.setWindowTitle("MODEP Rig Controller")
+        self.setWindowTitle("MODEP Rack Controller")
         self.setMinimumSize(800, 600)
 
         # Central widget
@@ -610,16 +581,20 @@ class MainWindow(QMainWindow):
 
         main_layout.addLayout(self.left_panel)
 
-        # Right side - controls panel
+        # Rackht side - controls panel
         self.controls_panel = ControlsPanel()
         self.controls_panel.setMinimumWidth(500)
         main_layout.addWidget(self.controls_panel, stretch=1)
 
-        # Initial state
-        self._rebuild_slot_widgets()
+        self.rack.client.ws.connect()
+
+    def _handle_rack_cb(self, slots: list):
+        """Цей метод виконується у фоновому потоці Orchestrator."""
+        # Просто перекидаємо дані в головний потік через сигнал
+        self.order_changed_signal.emit(slots)
 
     def _rebuild_slot_widgets(self):
-        """Rebuild all slot widgets from rig state."""
+        """Rebuild all slot widgets from rack state."""
         # Clear existing widgets
         for widget in self.slot_widgets:
             widget.deleteLater()
@@ -632,7 +607,7 @@ class MainWindow(QMainWindow):
                 item.widget().deleteLater()
 
         # Create new widgets for each slot
-        for i, slot in enumerate(self.rig.slots):
+        for i, slot in enumerate(self.rack.slots):
             plugin_name = slot.plugin.name
             slot_widget = SlotWidget(slot.label, i, plugin_name)
             slot_widget.clicked.connect(self._on_slot_clicked)
@@ -643,10 +618,10 @@ class MainWindow(QMainWindow):
             self.slots_container.addWidget(slot_widget)
 
         # Update selection
-        if self.selected_label and self.rig.get_slot_by_label(self.selected_label):
+        if self.selected_label and self.rack.get_slot_by_label(self.selected_label):
             self._select_slot(self.selected_label)
-        elif self.rig.slots:
-            self._select_slot(self.rig.slots[0].label)
+        elif self.rack.slots:
+            self._select_slot(self.rack.slots[0].label)
         else:
             self.selected_label = None
             self.controls_panel.set_plugin(None)
@@ -658,7 +633,7 @@ class MainWindow(QMainWindow):
         for sw in self.slot_widgets:
             sw.set_selected(sw.slot_label_id == label)
 
-        slot = self.rig.get_slot_by_label(label)
+        slot = self.rack.get_slot_by_label(label)
         if slot:
             self.controls_panel.set_plugin(slot.plugin, label)
         else:
@@ -670,9 +645,11 @@ class MainWindow(QMainWindow):
 
     def _on_add_plugin(self):
         """Add a new plugin (request via REST, wait for WS feedback)."""
-        dialog = PluginSelectorDialog(self.rig, self)
+        dialog = PluginSelectorDialog(self.rack, self)
         if dialog.exec() == QDialog.Accepted and dialog.selected_uri:
-            label = self.rig.request_add_plugin(dialog.selected_uri)
+            label = self.rack.request_add_plugin_at(
+                dialog.selected_uri, len(self.rack.slots)
+            )
             if label:
                 print(f"Requested add plugin, label={label}")
             else:
@@ -680,7 +657,7 @@ class MainWindow(QMainWindow):
 
     def _on_remove_plugin(self, label: str):
         """Remove plugin (request via REST, wait for WS feedback)."""
-        success = self.rig.request_remove_plugin(label)
+        success = self.rack.request_remove_plugin(label)
         if success:
             print(f"Requested remove plugin {label}")
         else:
@@ -688,40 +665,40 @@ class MainWindow(QMainWindow):
 
     def _on_replace_plugin(self, label: str):
         """Replace plugin - remove old, add new."""
-        dialog = PluginSelectorDialog(self.rig, self)
-        if dialog.exec() == QDialog.Accepted and dialog.selected_uri:
+        dialog = PluginSelectorDialog(self.rack, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.selected_uri:
             # Preserve slot index: remove old, then request add at same index
-            slot = self.rig.get_slot_by_label(label)
-            insert_idx = slot.index if slot else None
+            slot = self.rack.get_slot_by_label(label)
+            insert_idx = self.rack.slots.index(slot) if slot else None
             # Request remove first
-            self.rig.request_remove_plugin(label)
+            self.rack.request_remove_plugin(label)
             # Request add at the same index (will be moved when WS feedback arrives)
             if insert_idx is not None:
-                self.rig.request_add_plugin_at(dialog.selected_uri, insert_idx)
+                self.rack.request_add_plugin_at(dialog.selected_uri, insert_idx)
             else:
-                self.rig.request_add_plugin(dialog.selected_uri)
+                self.rack.request_add_plugin(dialog.selected_uri)
 
             return
 
     def _on_clear_all(self):
         """Clear all plugins."""
-        self.rig.clear()
+        self.rack.clear()
         # Immediately update UI to reflect cleared state
         self._rebuild_slot_widgets()
 
     def _on_slot_dropped(self, src_label: str, dest_index: int):
         """Handle drag-and-drop reorder: move src slot to dest index."""
         print(f"ON_SLOT_DROPPED: src_label={src_label} dest_index={dest_index}")
-        src_slot = self.rig.get_slot_by_label(src_label)
+        src_slot = self.rack.get_slot_by_label(src_label)
         if not src_slot:
             return
-        from_idx = src_slot.index
+        from_idx = self.rack.slots.index(src_slot)
         to_idx = dest_index
         print(f"ON_SLOT_DROPPED: from_idx={from_idx} to_idx={to_idx}")
         if from_idx == to_idx:
             return
-        # Use rig.move_slot which handles reconnect
-        self.rig.move_slot(from_idx, to_idx)
+        # Use rack.move_slot which handles reconnect
+        self.rack.request_move_slot(from_idx, to_idx)
         # Rebuild UI to reflect new order and keep selection on moved slot
         self._rebuild_slot_widgets()
         self._select_slot(src_label)
@@ -730,42 +707,29 @@ class MainWindow(QMainWindow):
     # WebSocket event handlers (thread-safe via Qt signals)
     # =========================================================================
 
-    def _on_ws_param_changed(self, label: str, symbol: str, value: float):
+    def _on_ws_param_changed(self, event: GraphParamSetEvent):
         """Handle parameter change from WebSocket - update UI."""
         # If this is the selected slot, update control widget
         if (
-            label == self.selected_label
-            and symbol in self.controls_panel.control_widgets
+            event.label == self.selected_label
+            and event.symbol in self.controls_panel.control_widgets
         ):
-            widget = self.controls_panel.control_widgets[symbol]
-            widget.set_value_silent(value)
+            widget = self.controls_panel.control_widgets[event.symbol]
+            widget.set_value_silent(event.value)
 
-    def _on_ws_bypass_changed(self, label: str, bypassed: bool):
+    def _on_ws_bypass_changed(self, event: GraphParamSetBypassEvent):
         """Handle bypass change from WebSocket - update UI."""
-        if label == self.selected_label:
-            self.controls_panel.set_bypass_silent(bypassed)
+        if event.label == self.selected_label:
+            self.controls_panel.set_bypass_silent(event.bypassed)
 
-    def _on_ws_slot_added(self, slot: Slot):
-        """Handle slot added from WebSocket - rebuild UI."""
-        print(f"UI: Slot added: {slot.label}")
-        self._rebuild_slot_widgets()
-        # Select the new slot
-        self._select_slot(slot.label)
-
-    def _on_ws_slot_removed(self, label: str):
-        """Handle slot removed from WebSocket - rebuild UI."""
-        print(f"UI: Slot removed: {label}")
-        self._rebuild_slot_widgets()
-
-    def _on_ws_order_changed(self, order: list):
+    def _on_rack_order_changed(self, order: list):
         """Handle order change from WebSocket - rebuild UI."""
         print(f"UI: Order changed: {order}")
         self._rebuild_slot_widgets()
 
     def closeEvent(self, event):
         """Called when user closes window."""
-        print("Closing rig connection...")
-        # self.rig.clear()
+        print("Closing rack connection...")
         event.accept()
 
 
@@ -775,11 +739,12 @@ def main():
     # Override server URL if needed
     import argparse
 
-    parser = argparse.ArgumentParser(description="MODEP Rig Controller")
+    parser = argparse.ArgumentParser(description="MODEP Rack Controller")
     parser.add_argument("--server", "-s", default=None, help="MOD server URL")
     parser.add_argument(
         "--config", "-c", help="Config", type=Path, default="config.toml"
     )
+    parser.add_argument("--slave", help="Slave", action="store_true")
     args = parser.parse_args()
 
     config = Config.load(args.config)
@@ -787,9 +752,11 @@ def main():
     if args.server:
         config.server.url = args.server
 
-    # Create rig (do not force reset on init — build state from WebSocket)
+    # Create rack (do not force reset on init — build state from WebSocket)
     print("Connecting to MOD server...")
-    rig = Rig(config, reset_on_init=False)
+    rack = Rack(
+        config, OrchestratorMode.OBSERVER if args.slave else OrchestratorMode.MANAGER
+    )
 
     # Create and run app
     app = QApplication(sys.argv)
@@ -797,7 +764,13 @@ def main():
     # Handle Ctrl+C
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
-    window = MainWindow(rig)
+    window = MainWindow(rack)
+    title = window.windowTitle()
+    if args.slave:
+        window.setWindowTitle(title + " (SLAVE)")
+    else:
+        window.setWindowTitle(title + " (MASTER)")
+
     window.show()
 
     # Timer for Ctrl+C on Linux/Windows

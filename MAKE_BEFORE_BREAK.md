@@ -5,43 +5,43 @@ Implemented seamless plugin switching without audio interruption using the "make
 
 ## What Changed From Initial Implementation
 
-Initial problem: Even when replacing a single plugin via `rig[0] = "new_plugin"`, 
+Initial problem: Even when replacing a single plugin via `rack[0] = "new_plugin"`, 
 the entire chain would be rebuilt (`reconnect()` called), causing audio interruption.
 
 **Root causes:**
-1. `Rig.__setitem__()` called `self.reconnect()` for all operations
-2. `Rig._on_add_slot()` in rig_ui.py called `self.reconnect()` after adding
-3. `Rig._reconnect_slot()` lacked `@suppress_structural` decorator
+1. `Rack.__setitem__()` called `self.reconnect()` for all operations
+2. `Rack._on_add_slot()` in qrack.py called `self.reconnect()` after adding
+3. `Rack._reconnect_slot()` lacked `@suppress_structural` decorator
 
 **Solutions implemented:**
 1. Updated `__setitem__()` to use `_reconnect_slot()` for partial operations
 2. Updated `remove_slot()` to use `unload()` (make-before-break)
-3. Updated rig_ui.py `_on_add_slot()` to use `_reconnect_slot()` instead
+3. Updated qrack.py `_on_add_slot()` to use `_reconnect_slot()` instead
 4. Added `@suppress_structural` decorator to `_reconnect_slot()`
 
 **Example:**
 ```python
 # Before (broken):
-rig[0] = "new_plugin"
+rack[0] = "new_plugin"
 # Called reconnect(), full rebuild
 
 # After (fixed):
-rig[0] = "new_plugin"
+rack[0] = "new_plugin"
 # Uses replace() → _reconnect_slot(), partial only
 ```
 
 ### 1. `Slot.replace(uri)` - Replace Plugin
-**Location:** `src/modep_rig/rig.py:207`
+**Location:** `src/mod_rack/rack.py:207`
 
 Atomically replaces plugin in a slot without interrupting audio:
 
 ```python
 # Old way (interrupts audio):
-rig[0].load(new_uri)
-rig.reconnect()  # Full disconnect/reconnect cycle
+rack[0].load(new_uri)
+rack.reconnect()  # Full disconnect/reconnect cycle
 
 # New way (seamless):
-rig[0].replace(new_uri)  # Handles disconnect/reconnect internally
+rack[0].replace(new_uri)  # Handles disconnect/reconnect internally
 ```
 
 **Algorithm:**
@@ -53,30 +53,30 @@ rig[0].replace(new_uri)  # Handles disconnect/reconnect internally
 **Benefits:**
 - Audio continues through new plugin during transition
 - Automatic rollback if new plugin fails to connect
-- No full rig reconnect needed
+- No full rack reconnect needed
 
 ---
 
 ### 2. `Slot.unload()` - Unload With Neighbor Connection
-**Location:** `src/modep_rig/rig.py:156`
+**Location:** `src/mod_rack/rack.py:156`
 
 Removes plugin while maintaining audio path through neighbors:
 
 ```python
 # Old way (may interrupt audio):
-rig.slots[0]._unload_internal()
-rig.slots.remove(rig.slots[0])
-rig.reconnect()  # Full reconnect
+rack.slots[0]._unload_internal()
+rack.slots.remove(rack.slots[0])
+rack.reconnect()  # Full reconnect
 
 # New way (seamless):
-rig.slots[0].unload()  # Handles everything
+rack.slots[0].unload()  # Handles everything
 ```
 
 **Algorithm:**
 1. Find previous non-empty slot (or input_slot)
 2. Find next non-empty slot (or output_slot)
 3. Connect previous → next directly
-4. Remove this slot from rig
+4. Remove this slot from rack
 5. Remove plugin from server
 
 **Benefits:**
@@ -87,7 +87,7 @@ rig.slots[0].unload()  # Handles everything
 ---
 
 ### 3. `Slot._load_internal(uri)` - Load Without Unloading
-**Location:** `src/modep_rig/rig.py:252`
+**Location:** `src/mod_rack/rack.py:252`
 
 Internal helper for `replace()`:
 - Loads plugin normally
@@ -97,8 +97,8 @@ Internal helper for `replace()`:
 
 ---
 
-### 4. `Rig._reconnect_slot(slot)` - Partial Reconnect
-**Location:** `src/modep_rig/rig.py:663`
+### 4. `Rack._reconnect_slot(slot)` - Partial Reconnect
+**Location:** `src/mod_rack/rack.py:663`
 
 Reconnects single slot without touching rest of chain:
 
@@ -120,8 +120,8 @@ disconnect_old()  # Old path removed, audio uninterrupted
 
 ---
 
-### 5. `Rig._disconnect_slot_connections(slot)` - Safe Disconnect
-**Location:** `src/modep_rig/rig.py:713`
+### 5. `Rack._disconnect_slot_connections(slot)` - Safe Disconnect
+**Location:** `src/mod_rack/rack.py:713`
 
 Safely disconnects all I/O of a single slot:
 
@@ -134,50 +134,50 @@ Finds all possible:
 
 ---
 
-### 6. `Rig.__setitem__()` - Smart Assignment
-**Location:** `src/modep_rig/rig.py:576`
+### 6. `Rack.__setitem__()` - Smart Assignment
+**Location:** `src/mod_rack/rack.py:576`
 
 Updated to use make-before-break:
 
 ```python
 # Load into empty slot
-rig[0] = "DS1"  # Uses load() + reconnect()
+rack[0] = "DS1"  # Uses load() + reconnect()
 
 # Replace occupied slot
-rig[0] = "Reverb"  # Uses replace() (make-before-break)
+rack[0] = "Reverb"  # Uses replace() (make-before-break)
 
 # Unload
-rig[0] = None  # Uses unload() (make-before-break)
+rack[0] = None  # Uses unload() (make-before-break)
 ```
 
 ## Control Flow Examples
 
 ### Entry Points That Use Make-Before-Break
 
-1. **`rig[idx] = plugin_name`** (replace or assign)
+1. **`rack[idx] = plugin_name`** (replace or assign)
    - If slot occupied: uses `Slot.replace()` → `_reconnect_slot()`
    - If slot empty: uses `Slot.load()` → `_reconnect_slot()`
    - Never calls full `reconnect()`
 
-2. **`rig[idx] = None`** (unload)
+2. **`rack[idx] = None`** (unload)
    - Uses `Slot.unload()` → connects neighbors → partial disconnect/connect
    - Never calls full `reconnect()`
 
-3. **`rig.remove_slot(slot)`** (programmatic removal)
+3. **`rack.remove_slot(slot)`** (programmatic removal)
    - Uses `Slot.unload()` (same as above)
    - Never calls full `reconnect()`
 
 ### Entry Points That Require Full Rebuild
 
-1. **`rig.clear()`** (clear entire chain)
+1. **`rack.clear()`** (clear entire chain)
    - Removes all slots, calls full `reconnect()`
    - Appropriate because entire structure is changing
 
-2. **`rig.set_state(state)`** (load from preset)
+2. **`rack.set_state(state)`** (load from preset)
    - Rebuilds from saved state, calls full `reconnect()`
    - Appropriate because structure can change significantly
 
-3. **`rig.reconnect()`** (manual reconnect)
+3. **`rack.reconnect()`** (manual reconnect)
    - Full rebuild, should be called rarely
    - Used in initialization and when structure significantly changes
 
