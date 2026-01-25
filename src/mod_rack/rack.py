@@ -204,7 +204,7 @@ class GridLayoutManager:
 
         # 1. Отримуємо стабільно відсортований поточний список
         ordered_slots = cls.sort_slots(list(slots))
-        
+
         # 2. Зберігаємо всі поточні координати у тому порядку, в якому вони є зараз
         # Це наш "шаблон" позицій на екрані
         coords_template = [(s.pos_x, s.pos_y) for s in ordered_slots]
@@ -217,7 +217,7 @@ class GridLayoutManager:
         slot_to_move = ordered_slots.pop(from_idx)
         ordered_slots.insert(to_idx, slot_to_move)
 
-        # 4. Створюємо ret_val: беремо переставлені слоти 
+        # 4. Створюємо ret_val: беремо переставлені слоти
         # і даємо їм координати з шаблону по порядку
         result = {}
         for idx, slot in enumerate(ordered_slots):
@@ -360,6 +360,8 @@ class Orchestrator:
 
         # Locks and flags
         self._lock = threading.RLock()
+        self._reorder_timer: threading.Timer | None = None
+        self._debounce_delay: float = 0.1
         self._loading = True
         self._normalizing = False
 
@@ -424,7 +426,7 @@ class Orchestrator:
         with self._lock:
             self._loading = False
         if not self._loading:
-            self._reorder_slots_by_pos(force_emit=True)
+            self._schedule_reorder(force_emit=True)
 
     def _on_graph_hw_port_add(self, event: GraphAddHwPortEvent):
         """
@@ -478,7 +480,7 @@ class Orchestrator:
             self.slots.append(slot)
 
         if not self._loading:
-            self._reorder_slots_by_pos(force_emit=True)
+            self._schedule_reorder(force_emit=True)
 
     def _on_graph_plugin_remove(self, event: GraphPluginRemoveEvent):
         """
@@ -496,7 +498,7 @@ class Orchestrator:
             print(f"  Removed slot: {event.label}")
 
         if not self._loading:
-            self._reorder_slots_by_pos(force_emit=True)
+            self._schedule_reorder(force_emit=True)
 
     def _on_graph_connect(self, event: GraphConnectEvent):
         _Color.blue(f"\u221e Connected: {event.src_path} \u21e2 {event.dst_path}")
@@ -525,7 +527,6 @@ class Orchestrator:
             return
 
         with self._lock:
-            # NOTE: we should ensure that plugin already got an update
             x, y = (event.x, event.y)
             if slot.is_pos_changed((x, y)):
                 _Color.yellow(f"\u21bb Syncing pos: {slot.label} to {(x, y)}")
@@ -533,9 +534,9 @@ class Orchestrator:
                 slot.pos_y = y
 
         if not self._loading and not self.normalizing:
-            self._reorder_slots_by_pos()
+            self._schedule_reorder()
 
-    def request_normalize(self, /, force: bool = False):
+    def _normalize_layout(self, /, force: bool = False):
         if self._loading:
             return
 
@@ -554,14 +555,10 @@ class Orchestrator:
                 if slot.is_pos_changed((x, y)):
                     slot.pos_x = x
                     slot.pos_y = y
-                    # Need small delay before server be able to react
-                    time.sleep(0.1)
                     self.client.effect_position(slot.label, x, y)
         except Exception as err:
             _Color.red(f"\u21bb Normalizing: error occured: {err}")
         finally:
-            # Debounce delay
-            time.sleep(0.4)
             with self._lock:
                 self.normalizing = False
 
@@ -573,12 +570,24 @@ class Orchestrator:
             new_order = [s.label for s in self.slots]
 
         # then normalize
-        self.request_normalize()
+        self._normalize_layout()
 
         with self._lock:
             # check order changed
             if old_order != new_order or force_emit:
                 self._order_changed_emit()
+
+    def _schedule_reorder(self, /, force_emit: bool = False):
+        if self._reorder_timer:
+            self._reorder_timer.cancel()
+
+        # Таймер викличе реордер в окремому потоці через 200мс спокою
+        self._reorder_timer = threading.Timer(
+            self._debounce_delay,
+            self._reorder_slots_by_pos,
+            kwargs={"force_emit": force_emit},
+        )
+        self._reorder_timer.start()
 
     def _order_changed_emit(self):
         _Color.info("\u21c5 Slots order changed")
@@ -613,51 +622,9 @@ class Rack(Orchestrator):
     def __init__(self, config: Config, client: Client | None = None):
         super().__init__(config=config, mode=OrchestratorMode.MANAGER)
 
-    def _on_loading_end(self, event: LoadingEndEvent):
-        super()._on_loading_end(event)
-        self.reconnect_seamless()
-
-    def _on_graph_hw_port_add(self, event: GraphAddHwPortEvent):
-        super()._on_graph_hw_port_add(event)
-        with self._lock:
-            if not self._loading:
-                self.reconnect_seamless()
-
-    def _on_position_change(self, event: GraphPluginPosEvent):
-        """
-        Handle position change from WebSocket.
-        Updates slot position and reorders slots based on new coordinates.
-        """
-        super()._on_position_change(event)
-        with self._lock:
-            if not self._loading:
-                self.reconnect_seamless()
-
-    def _on_graph_plugin_add(self, event: GraphPluginAddEvent):
-        """
-        Handle plugin added via WebSocket feedback.
-
-        Creates Slot, fetches port info, connects to chain.
-        """
-        super()._on_graph_plugin_add(event)
-        with self._lock:
-            if not self._loading:
-                self.reconnect_seamless()
-
-    def _on_graph_plugin_remove(self, event: GraphPluginRemoveEvent):
-        """
-        Handle plugin removed via WebSocket feedback.
-
-        Updates local graph state ONLY.
-        """
-        super()._on_graph_plugin_remove(event)
-        with self._lock:
-            if not self._loading:
-                self.reconnect_seamless()
-
     def _order_changed_emit(self):
-        super()._order_changed_emit()
         self.reconnect_seamless()
+        super()._order_changed_emit()
 
     # =========================================================================
     # Request API (ініціювання без локальних змін)
@@ -800,17 +767,13 @@ class Rack(Orchestrator):
                 if slot.is_pos_changed((x, y)):
                     slot.pos_x = x
                     slot.pos_y = y
-                    # Need small delay before server be able to react
-                    time.sleep(0.1)
                     self.client.effect_position(slot.label, x, y)
         except Exception as err:
             _Color.red(f"\u21bb Normalizing: error occured: {err}")
         finally:
-            # Debounce delay
-            time.sleep(0.4)
             with self._lock:
                 self.normalizing = False
-            self._reorder_slots_by_pos(force_emit=True)
+            self._schedule_reorder(force_emit=True)
 
     # =========================================================================
     # Routing
@@ -874,12 +837,12 @@ class Rack(Orchestrator):
         join_inputs = False
 
         if isinstance(src, HardwareSlot):
-            join_outputs = src.join_inputs
+            join_outputs = src.join_outputs
         elif isinstance(src, PluginSlot) and src.plugin:
             join_outputs = src.plugin.join_outputs
 
         if isinstance(dst, HardwareSlot):
-            join_inputs = dst.join_outputs
+            join_inputs = dst.join_inputs
         elif isinstance(dst, PluginSlot) and dst.plugin:
             join_inputs = dst.plugin.join_inputs
 
