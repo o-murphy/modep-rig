@@ -36,7 +36,7 @@ def main():
     # Create rack (do not force reset on init — build state from WebSocket)
     print("Connecting to MOD server...")
     try:
-        Orchestrator(config, OrchestratorMode.MANAGER).run()    
+        Orchestrator(config, OrchestratorMode.MANAGER).run()
     except KeyboardInterrupt:
         print("Stopping monitor...")
 

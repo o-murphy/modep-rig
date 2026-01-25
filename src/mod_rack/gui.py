@@ -35,10 +35,10 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QMenu,
 )
-from PySide6.QtCore import Qt, Signal, QTimer, QObject
+from PySide6.QtCore import Qt, Signal, QTimer
 
 from mod_rack import Config, Rack, ControlPort
-from mod_rack.rack import OrchestratorMode, PluginSlot
+from mod_rack.rack import OrchestratorMode
 
 
 class ControlWidget(QWidget):
@@ -533,6 +533,7 @@ class ControlsPanel(QScrollArea):
 
 class MainWindow(QMainWindow):
     """Main application window."""
+
     order_changed_signal = Signal(list)
 
     def __init__(self, rack: Rack):
@@ -753,7 +754,9 @@ def main():
 
     # Create rack (do not force reset on init — build state from WebSocket)
     print("Connecting to MOD server...")
-    rack = Rack(config, OrchestratorMode.OBSERVER if args.slave else OrchestratorMode.MANAGER)
+    rack = Rack(
+        config, OrchestratorMode.OBSERVER if args.slave else OrchestratorMode.MANAGER
+    )
 
     # Create and run app
     app = QApplication(sys.argv)

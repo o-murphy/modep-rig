@@ -1,7 +1,7 @@
 from enum import Enum, auto
 import threading
 import time
-from typing import Any, Callable, SupportsIndex, TypeAlias
+from typing import Callable, SupportsIndex, TypeAlias
 
 import secrets
 import string
