@@ -7,7 +7,7 @@ import secrets
 import string
 import weakref
 
-from mod_rack.config import Config, PluginConfig
+from mod_rack.config import Config, HardwareConfig, PluginConfig
 from mod_rack.client import (
     GraphAddHwPortEvent,
     Client,
@@ -100,9 +100,10 @@ class PluginSlot:
 class HardwareSlot:
     """Hardware I/O слот (capture/playback)."""
 
-    def __init__(self, ports: list[str], is_input: bool):
-        self._ports = ports
+    def __init__(self, ports: list[str], is_input: bool, config: HardwareConfig):
+        self.ports = ports
         self._is_input = is_input
+        self._join_ports = config.join_inputs if is_input else config.join_outputs
 
     @property
     def label(self) -> str:
@@ -111,16 +112,24 @@ class HardwareSlot:
     @property
     def outputs(self) -> list[str]:
         """Виходи hardware input slot (capture порти)."""
-        return self._ports if self._is_input else []
+        return self.ports if self._is_input else []
+
+    @property
+    def join_outputs(self) -> bool:
+        return self._join_ports if self._is_input else False
 
     @property
     def inputs(self) -> list[str]:
         """Входи hardware output slot (playback порти)."""
-        return self._ports if not self._is_input else []
+        return self.ports if not self._is_input else []
+
+    @property
+    def join_inputs(self) -> bool:
+        return self._join_ports if not self._is_input else False
 
     def __repr__(self):
         kind = "Input" if self._is_input else "Output"
-        return f"HardwareSlot({kind}, ports={self._ports})"
+        return f"HardwareSlot({kind}, ports={self.ports})"
 
 
 AnySlot = HardwareSlot | PluginSlot
@@ -184,25 +193,47 @@ class GridLayoutManager:
 
     @classmethod
     def get_clustered_rows(cls, slots: list[PluginSlot]) -> list[list[PluginSlot]]:
-        """Допоміжний метод для отримання групованих за Y слотів."""
         if not slots:
             return []
+
+        # 1. Сортуємо ВСІ слоти спочатку по Y, потім по X, потім по label.
+        # Це гарантує детермінованість: при однакових координатах порядок не зміниться.
         active = sorted(
-            [s for s in slots if s.pos_y is not None], key=lambda s: s.pos_y
+            slots,
+            key=lambda s: (
+                s.pos_y if s.pos_y is not None else 0,
+                s.pos_x if s.pos_x is not None else 0,
+                s.label,
+            ),
         )
 
         rows = []
-        if active:
-            current_row = [active[0]]
-            rows.append(current_row)
-            for i in range(1, len(active)):
-                slot = active[i]
-                avg_y = sum(s.pos_y for s in current_row) / len(current_row)
-                if abs(slot.pos_y - avg_y) <= cls.Y_THRESHOLD:
-                    current_row.append(slot)
-                else:
-                    current_row = [slot]
-                    rows.append(current_row)
+        if not active:
+            return rows
+
+        current_row = [active[0]]
+        rows.append(current_row)
+
+        # Використовуємо Y першого елемента в ряду як "якір"
+        row_anchor_y = active[0].pos_y
+
+        for i in range(1, len(active)):
+            slot = active[i]
+
+            # Порівнюємо не з середнім, а з якорем ряду.
+            # Додаємо невеликий запас (epsilon), щоб уникнути проблем з float
+            if abs(slot.pos_y - row_anchor_y) <= cls.Y_THRESHOLD:
+                current_row.append(slot)
+            else:
+                # Початок нового ряду
+                current_row = [slot]
+                rows.append(current_row)
+                row_anchor_y = slot.pos_y
+
+        # 2. Додатково сортуємо кожен ряд по X, щоб нормалізація не "перемішувала" колонки
+        for row in rows:
+            row.sort(key=lambda s: (s.pos_x if s.pos_x is not None else 0, s.label))
+
         return rows
 
     @classmethod
@@ -246,6 +277,10 @@ class GridLayoutManager:
         """Повертає координати для початку нового ряду (нижче всіх існуючих)."""
         rows = cls.get_clustered_rows(slots)
         return (float(cls.BASE_X), float(cls.BASE_Y + len(rows) * cls.Y_STEP))
+
+
+class RoutingManager:
+    pass
 
 
 # =============================================================================
@@ -297,8 +332,10 @@ class Orchestrator:
         self._order_change_listeners: set[OnRackOrderChangeCallbackRef] = set()
 
         # Slots and connections cache
-        self.input_slot = HardwareSlot(ports=[], is_input=True)
-        self.output_slot = HardwareSlot(ports=[], is_input=False)
+        self.input_slot = HardwareSlot(ports=[], is_input=True, config=config.hardware)
+        self.output_slot = HardwareSlot(
+            ports=[], is_input=False, config=config.hardware
+        )
         self.slots: list[PluginSlot] = []
         self._connections: set[tuple[str, str]] = set()
 
@@ -369,8 +406,8 @@ class Orchestrator:
             slot = self.input_slot
 
         if event.name not in hw_config.disable_ports:
-            if event.name not in slot._ports:
-                slot._ports.append(event.name)
+            if event.name not in slot.ports:
+                slot.ports.append(event.name)
 
     def _on_graph_plugin_add(self, event: GraphPluginAddEvent):
         """
@@ -515,7 +552,6 @@ class Orchestrator:
 
         for ref in self._order_change_listeners:
             cb = ref()
-            print("CB", cb)
             if cb is None:
                 dead.add(ref)
             else:
@@ -691,7 +727,7 @@ class Rack(Orchestrator):
 
         return success
 
-    def move_slot(self, from_idx: int, to_idx: int):
+    def request_move_slot(self, from_idx: int, to_idx: int):
         """
         Move slot to different position in chain.
 
@@ -709,6 +745,10 @@ class Rack(Orchestrator):
             return
 
         print(f"Moving slot from idx {from_idx} to {to_idx}")
+
+        # slot = self.slots[from_idx]
+        # x, y = GridLayoutManager.get_insertion_coords(self.slots, to_idx)
+        # self.client.effect_position(slot.label, x, y)
 
         # Reorder locally
         slot = self.slots.pop(from_idx)
@@ -772,9 +812,8 @@ class Rack(Orchestrator):
 
         print("=== RECONNECT SEAMLESS DONE ===\n")
 
-    def _get_connection_pairs(
-        self, src: AnySlot, dst: AnySlot
-    ) -> list[tuple[str, str]]:
+    @classmethod
+    def _get_connection_pairs(cls, src: AnySlot, dst: AnySlot) -> list[tuple[str, str]]:
         """Calculate connection pairs between src and dst (without connecting)."""
         outputs = src.outputs
         inputs = dst.inputs
@@ -787,16 +826,14 @@ class Rack(Orchestrator):
         join_inputs = False
 
         if isinstance(src, HardwareSlot):
-            join_outputs = self.config.hardware.join_inputs
+            join_outputs = src.join_inputs
         elif isinstance(src, PluginSlot) and src.plugin:
-            src_config = self.config.get_plugin_by_uri(src.plugin.uri)
-            join_outputs = src_config.join_outputs if src_config else False
+            join_outputs = src.plugin.join_outputs
 
         if isinstance(dst, HardwareSlot):
-            join_inputs = self.config.hardware.join_outputs
+            join_inputs = dst.join_outputs
         elif isinstance(dst, PluginSlot) and dst.plugin:
-            dst_config = self.config.get_plugin_by_uri(dst.plugin.uri)
-            join_inputs = dst_config.join_inputs if dst_config else False
+            join_inputs = dst.plugin.join_inputs
 
         connections = []
 

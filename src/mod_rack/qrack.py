@@ -697,7 +697,7 @@ class MainWindow(QMainWindow):
         if from_idx == to_idx:
             return
         # Use rack.move_slot which handles reconnect
-        self.rack.move_slot(from_idx, to_idx)
+        self.rack.request_move_slot(from_idx, to_idx)
         # Rebuild UI to reflect new order and keep selection on moved slot
         self._rebuild_slot_widgets()
         self._select_slot(src_label)

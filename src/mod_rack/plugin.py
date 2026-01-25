@@ -46,11 +46,16 @@ class Plugin:
         self.client = client
         self.uri = uri
         self.label = label
-        self.inputs: list[Port] = []
-        self.outputs: list[Port] = []
+
         self._bypassed = False
         self._config = config
         self._controls: dict[str, ControlPort] = {}
+
+        # inputs setup
+        self.inputs: list[Port] = []
+        self.outputs: list[Port] = []
+        self.join_inputs: bool = config.join_inputs
+        self.join_outputs: bool = config.join_outputs
 
         self._effect_data = self.client.effect_get(self.uri)
         self.name = self._effect_data.get("name", self.label)
