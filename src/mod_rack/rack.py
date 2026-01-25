@@ -1,7 +1,7 @@
 from enum import Enum, auto
 import threading
 import time
-from typing import Callable, SupportsIndex, TypeAlias
+from typing import Any, Callable, SupportsIndex, TypeAlias
 
 import secrets
 import string
@@ -13,11 +13,13 @@ from mod_rack.client import (
     Client,
     GraphConnectEvent,
     GraphDisconnectEvent,
+    RemoveAllEvent,
     LoadingEndEvent,
     LoadingStartEvent,
     GraphPluginAddEvent,
     GraphPluginPosEvent,
     GraphPluginRemoveEvent,
+    ResetConnectionsEvent,
 )
 from mod_rack.plugin import Plugin
 
@@ -190,8 +192,8 @@ class GridLayoutManager:
         Y_THRESHOLD: Maximum Y difference to consider slots in the same row for sorting.
     """
 
-    X_STEP: float = 600.0
-    Y_STEP: float = 1000.0
+    X_STEP: float = 1000.0
+    Y_STEP: float = 600.0
     BASE_X: float = 200.0
     BASE_Y: float = 200.0
     Y_THRESHOLD: float = 150.0
@@ -280,7 +282,7 @@ class GridLayoutManager:
             ),
         )
 
-        rows = []
+        rows: list[list[PluginSlot]] = []
         if not active:
             return rows
 
@@ -482,8 +484,10 @@ class Orchestrator:
         self.client.ws.on(GraphAddHwPortEvent, self._on_graph_hw_port_add)
         self.client.ws.on(GraphPluginAddEvent, self._on_graph_plugin_add)
         self.client.ws.on(GraphPluginRemoveEvent, self._on_graph_plugin_remove)
+        self.client.ws.on(RemoveAllEvent, self._on_remove_all)
         self.client.ws.on(GraphConnectEvent, self._on_graph_connect)
         self.client.ws.on(GraphDisconnectEvent, self._on_graph_disconnect)
+        self.client.ws.on(ResetConnectionsEvent, self._on_reset_connections)
         self.client.ws.on(GraphPluginPosEvent, self._on_position_change)
 
     def _on_loading_start(self, event: LoadingStartEvent):
@@ -493,6 +497,7 @@ class Orchestrator:
             _Color.yellow("\u25f7 Loading start, initializing...")
             self._loading = True
             self._normalizing = False
+            self.slots.clear()
             self._connections.clear()
 
     def _on_loading_end(self, event: LoadingEndEvent):
@@ -501,6 +506,16 @@ class Orchestrator:
             self._loading = False
         if not self._loading:
             self._schedule_reorder(force_emit=True)
+
+    def _on_reset_connections(self, event: ResetConnectionsEvent | Any):
+        with self._lock:
+            self._connections.clear()
+            self._schedule_reorder()
+
+    def _on_remove_all(self, event: RemoveAllEvent | Any):
+        with self._lock:
+            self.slots.clear()
+            self._schedule_reorder()
 
     def _on_graph_hw_port_add(self, event: GraphAddHwPortEvent):
         """
@@ -540,6 +555,9 @@ class Orchestrator:
 
             if not plugin:
                 _Color.red(f"Can not load plugin: {event.label}, {event.uri}")
+                # TODO: maybe should remove it
+                # with self._lock:
+                #     self.client.effect_remove(event.label)
                 return
 
             # Створюємо слот
@@ -637,7 +655,6 @@ class Orchestrator:
                 self.normalizing = False
 
     def _reorder_slots_by_pos(self, /, force_emit=False):
-
         with self._lock:
             # sort slots by pos
             old_order = [s.label for s in self.slots]
@@ -693,7 +710,7 @@ class Orchestrator:
         """Синхронізує поточні з'єднання на сервері з розрахованим ідеалом."""
         if self._loading:
             return
-        
+
         if self.mode != OrchestratorMode.MANAGER:
             return
 
@@ -741,6 +758,34 @@ class Orchestrator:
                     self.client.effect_disconnect(out_path, in_path)
                 except Exception as e:
                     _Color.red(f"Error disconnecting {out_path} -> {in_path}: {e}")
+
+    def clear(self):
+        """Request removal of all plugins safely."""
+        with self._lock:
+            if not self.slots:
+                return
+
+            _Color.info("--- Clearing Rack ---")
+
+            # 1. Зупиняємо моніторинг порядку на час масового видалення
+            # (необов'язково, але корисно мати прапор масової операції)
+
+            # 2. Розірвати всі кабелі одним махом, щоб не було тріску
+            # при перепідключенні сусідів, які теж зараз зникнуть
+            self._disconnect_everything()
+
+            # 3. Видаляємо плагіни.
+            # Використовуємо прямий виклик client, щоб уникнути
+            # зайвої логіки "сусідів" у request_remove_plugin
+            labels_to_remove = [slot.label for slot in self.slots]
+
+            for label in labels_to_remove:
+                self.client.effect_remove(label)
+
+            self.client.reset()
+
+            # 4. Примусово оновлюємо стан, якщо хочемо миттєвої реакції
+            # Хоча WS-події прийдуть і самі запустять реордер.
 
 
 # =============================================================================
@@ -938,32 +983,6 @@ class Rack(Orchestrator):
     def get_plugins_by_category(self, category: str) -> list[PluginConfig]:
         """Get plugins by category."""
         return self.config.get_plugins_by_category(category)
-
-    def clear(self):
-        """Request removal of all plugins safely."""
-        with self._lock:
-            if not self.slots:
-                return
-
-            _Color.info("--- Clearing Rack ---")
-
-            # 1. Зупиняємо моніторинг порядку на час масового видалення
-            # (необов'язково, але корисно мати прапор масової операції)
-
-            # 2. Розірвати всі кабелі одним махом, щоб не було тріску
-            # при перепідключенні сусідів, які теж зараз зникнуть
-            self._disconnect_everything()
-
-            # 3. Видаляємо плагіни.
-            # Використовуємо прямий виклик client, щоб уникнути
-            # зайвої логіки "сусідів" у request_remove_plugin
-            labels_to_remove = [slot.label for slot in self.slots]
-
-            for label in labels_to_remove:
-                self.client.effect_remove(label)
-
-            # 4. Примусово оновлюємо стан, якщо хочемо миттєвої реакції
-            # Хоча WS-події прийдуть і самі запустять реордер.
 
     def __repr__(self):
         slots_str = ", ".join(f"{i}:{s.label}" for i, s in enumerate(self.slots))

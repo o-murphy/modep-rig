@@ -54,8 +54,9 @@ class Plugin:
         # inputs setup
         self.inputs: list[Port] = []
         self.outputs: list[Port] = []
-        self.join_inputs: bool = config.join_inputs
-        self.join_outputs: bool = config.join_outputs
+        # configuration
+        self.join_inputs: bool = config.join_inputs if config is not None else False
+        self.join_outputs: bool = config.join_outputs if config is not None else False
 
         self._effect_data = self.client.effect_get(self.uri)
         self.name = self._effect_data.get("name", self.label)

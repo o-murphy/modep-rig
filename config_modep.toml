@@ -50,10 +50,10 @@ category = "distortion"
 
 # --- Simulators / Amps ---
 
-# [[plugins]]
-# name = "Neural Amp Modeler"
-# uri = "http://github.com/mikeoliphant/neural-amp-modeler-lv2"
-# category = "simulator"
+[[plugins]]
+name = "Neural Amp Modeler"
+uri = "http://github.com/mikeoliphant/neural-amp-modeler-lv2"
+category = "simulator"
 
 [[plugins]]
 name = "GxAmplifier-X"
@@ -116,10 +116,10 @@ category = "spectral"
 
 # --- Dynamics ---
 
-# [[plugins]]
-# name = "Noise Gate"
-# uri = "http://moddevices.com/plugins/mod-devel/System-NoiseGate"
-# category = "dynamics"
+[[plugins]]
+name = "Noise Gate"
+uri = "http://moddevices.com/plugins/mod-devel/System-NoiseGate"
+category = "dynamics"
 
 [[plugins]]
 name = "C* Compress"

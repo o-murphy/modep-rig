@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 import time
 import threading
 import weakref
-from typing import Any, Callable, Type, TypeAlias, TypeVar, cast
+from typing import Any, Callable, Protocol, Type, TypeAlias, TypeVar, cast
 from urllib.parse import unquote, urlparse
 
 import requests
@@ -19,11 +19,17 @@ __all__ = [
     "PingEvent",
     "StatsEvent",
     "SysStatsEvent",
+    "LoadingStartEvent",
+    "LoadingEndEvent",
+    "RemoveAllEvent",
+    "ResetConnectionsEvent",
+    "TransportEvent",
+    "TrueBypassEvent",
+    "SizeEvent",
+    "PbSizeEvent",
     "GraphAddHwPortEvent",
     "GraphConnectEvent",
     "GraphDisconnectEvent",
-    "LoadingStartEvent",
-    "LoadingEndEvent",
     "GraphParamSetEvent",
     "GraphParamSetBypassEvent",
     "GraphPluginPosEvent",
@@ -31,7 +37,6 @@ __all__ = [
     "GraphPluginRemoveEvent",
     "UnknownEvent",
 ]
-
 
 HEADERS = {
     "Accept": "application/json, text/plain, */*",
@@ -66,12 +71,6 @@ class SysStatsEvent:
 
 
 @dataclass(frozen=True)
-class GraphAddHwPortEvent:
-    name: str
-    is_output: bool
-
-
-@dataclass(frozen=True)
 class LoadingStartEvent:
     pass
 
@@ -79,6 +78,45 @@ class LoadingStartEvent:
 @dataclass(frozen=True)
 class LoadingEndEvent:
     pass
+
+
+@dataclass(frozen=True)
+class RemoveAllEvent:
+    pass
+
+
+@dataclass(frozen=True)
+class ResetConnectionsEvent:
+    pass
+
+
+@dataclass(frozen=True)
+class TransportEvent:
+    _any: Any
+
+
+@dataclass(frozen=True)
+class TrueBypassEvent:
+    _a: int
+    _b: int
+
+
+@dataclass(frozen=True)
+class SizeEvent:
+    _a: int
+    _b: int
+
+
+@dataclass(frozen=True)
+class PbSizeEvent:
+    x: int
+    y: int
+
+
+@dataclass(frozen=True)
+class GraphAddHwPortEvent:
+    name: str
+    is_output: bool
 
 
 @dataclass(frozen=True)
@@ -144,6 +182,12 @@ WsEvent = (
     | SysStatsEvent
     | LoadingStartEvent
     | LoadingEndEvent
+    | RemoveAllEvent
+    | ResetConnectionsEvent
+    | TransportEvent
+    | TrueBypassEvent
+    | SizeEvent
+    | PbSizeEvent
     | GraphAddHwPortEvent
     | GraphConnectEvent
     | GraphDisconnectEvent
@@ -155,7 +199,13 @@ WsEvent = (
     | UnknownEvent
 )
 
-EventCallBack = Callable[[WsEvent], None]
+WsEventT = TypeVar("WsEventT", bound=WsEvent, covariant=True)
+
+
+class EventCallBack(Protocol[WsEventT]):
+    def __call__(self, WsEventT) -> None: ...
+
+
 EventCallBackRef: TypeAlias = (
     weakref.ReferenceType[EventCallBack] | weakref.WeakMethod[EventCallBack]
 )
@@ -212,7 +262,7 @@ class WsProtocol:
                         label=inst.removeprefix(prefix), x=x, y=y
                     )
                 except ValueError:
-                    pass
+                    None
 
             case ["add", inst, uri, rx, ry, *_]:
                 try:
@@ -223,6 +273,9 @@ class WsProtocol:
 
             case ["add", inst, uri, *_]:
                 return GraphPluginAddEvent(inst.removeprefix(prefix), uri, 0, 0)
+
+            case ["remove", ":all"]:
+                return RemoveAllEvent()
 
             case ["remove", inst, *_]:
                 # remove /graph/label
@@ -236,6 +289,30 @@ class WsProtocol:
                     src.removeprefix(prefix),
                     dst.removeprefix(prefix),
                 )
+
+            case ["resetConnections", *_]:
+                return ResetConnectionsEvent()
+
+            case ["transport", *_any]:
+                TransportEvent(_any)
+
+            case ["true_bypass", _a, _b, *_]:
+                try:
+                    return TrueBypassEvent(int(_a), int(_b))
+                except ValueError:
+                    return None
+
+            case ["size", _a, _b, *_]:
+                try:
+                    SizeEvent(int(_a), int(_b))
+                except ValueError:
+                    return None
+
+            case ["pb_size", rx, ry, *_]:
+                try:
+                    return PbSizeEvent(int(rx), int(ry))
+                except ValueError:
+                    return None
 
             case ["param_set", inst, symbol, val, *_]:
                 try:
@@ -359,9 +436,6 @@ class WsConnection:
         self._connected.clear()
         if self._on_close:
             self._on_close()
-
-
-WsEventT = TypeVar("WsEventT", bound=WsEvent)
 
 
 class StateSnapshot:
