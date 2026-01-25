@@ -637,10 +637,6 @@ class Orchestrator:
                 self.normalizing = False
 
     def _reorder_slots_by_pos(self, /, force_emit=False):
-        self.reconnect_seamless()
-
-        if self.mode != OrchestratorMode.MANAGER:
-            return
 
         with self._lock:
             # sort slots by pos
@@ -654,6 +650,7 @@ class Orchestrator:
         with self._lock:
             # check order changed
             if old_order != new_order or force_emit or (not self.slots and old_order):
+                self.reconnect_seamless()
                 self._order_changed_emit()
 
     def _schedule_reorder(self, /, force_emit: bool = False):
@@ -666,6 +663,7 @@ class Orchestrator:
             self._reorder_slots_by_pos,
             kwargs={"force_emit": force_emit},
         )
+
         self._reorder_timer.start()
 
     def _order_changed_emit(self):
@@ -694,6 +692,9 @@ class Orchestrator:
     def reconnect_seamless(self):
         """Синхронізує поточні з'єднання на сервері з розрахованим ідеалом."""
         if self._loading:
+            return
+        
+        if self.mode != OrchestratorMode.MANAGER:
             return
 
         with self._lock:
