@@ -75,6 +75,12 @@ class PluginSlot:
         label = path.split("/")[-1]
         return label.replace("#", "_").replace(" ", "_")
 
+    def is_pos_changed(self, new_pos: tuple[float, float]):
+        new_x, new_y = new_pos
+        old_x = self.pos_x
+        old_y = self.pos_y
+        return abs(old_x - new_x) >= 1.0 or abs(old_y - new_y) >= 1.0
+
     def __eq__(self, other):
         if not isinstance(other, PluginSlot):
             return False
@@ -151,63 +157,57 @@ class GridLayoutManager:
         self.y_threshold = y_threshold
 
     def sort_slots(self, slots: list[PluginSlot]) -> list[PluginSlot]:
-        """
-        Sort slots by layout order using Y-clustering.
-
-        Slots are grouped into rows based on Y-coordinate proximity,
-        then sorted left-to-right within each row.
-
-        Args:
-            slots: List of PluginSlot instances to sort.
-
-        Returns:
-            List of PluginSlot sorted by row and X coordinate.
-        """
-        if not slots:
-            return []
-
-        sorted_by_y = sorted(slots, key=lambda s: s.pos_y or 0)
-
-        rows: dict[PluginSlot, int] = {}
-        current_row = 0
-        prev_y: float | None = None
-
-        for slot in sorted_by_y:
-            y = slot.pos_y or 0
-            if prev_y is not None and (y - prev_y) > self.y_threshold:
-                current_row += 1
-            rows[slot] = current_row
-            prev_y = y
-
-        return sorted(slots, key=lambda s: (rows[s], s.pos_x or 0))
+        """Реюзимо кластеризацію для отримання плаского відсортованого списку."""
+        rows = self.get_clustered_rows(slots)
+        # Просто "сплющуємо" список списків у один список
+        return [slot for row in rows for slot in row]
 
     def normalize(
         self, slots: list[PluginSlot]
     ) -> dict[PluginSlot, tuple[float, float]]:
-        """
-        Calculate normalized positions for slots on a grid.
+        if not slots:
+            return {}
 
-        Places slots in rows of `max_per_row` plugins each, filling rows
-        left-to-right before moving to the next row.
-
-        Args:
-            slots: List of PluginSlot instances to normalize.
-
-        Returns:
-            Dictionary mapping each PluginSlot to its (x, y) normalized position.
-        """
         result = {}
+        # 1. Отримуємо не просто список, а список кластерів (рядів)
+        # Для цього нам треба трохи змінити або використати внутрішню логіку sort_slots
+        rows = self.get_clustered_rows(slots)
 
-        for idx, slot in enumerate(slots):
-            row = idx // self.max_per_row
-            col = idx % self.max_per_row
+        for row_idx, row_slots in enumerate(rows):
+            # Кожен кластер отримує свій фіксований Y
+            y = self.base_y + row_idx * self.y_step
 
-            x = self.base_x + col * self.x_step
-            y = self.base_y + row * self.y_step
+            # Сортуємо плагіни всередині ряду зліва направо
+            row_slots.sort(key=lambda s: s.pos_x or 0)
 
-            result[slot] = (x, y)
+            for col_idx, slot in enumerate(row_slots):
+                # Кожен плагін у ряду отримує свій X
+                x = self.base_x + col_idx * self.x_step
+                result[slot] = (x, y)
 
         return result
+
+    def get_clustered_rows(self, slots: list[PluginSlot]) -> list[list[PluginSlot]]:
+        """Допоміжний метод для отримання групованих за Y слотів."""
+        if not slots:
+            return []
+        active = sorted(
+            [s for s in slots if s.pos_y is not None], key=lambda s: s.pos_y
+        )
+
+        rows = []
+        if active:
+            current_row = [active[0]]
+            rows.append(current_row)
+            for i in range(1, len(active)):
+                slot = active[i]
+                avg_y = sum(s.pos_y for s in current_row) / len(current_row)
+                if abs(slot.pos_y - avg_y) <= self.y_threshold:
+                    current_row.append(slot)
+                else:
+                    current_row = [slot]
+                    rows.append(current_row)
+        return rows
 
 
 # =============================================================================
@@ -217,38 +217,59 @@ class GridLayoutManager:
 
 class _Color:
     @staticmethod
-    def _info(msg):
+    def info(msg):
         print(f"\033[32m{msg}\033[0m")
 
     @staticmethod
-    def _blue(msg):
+    def blue(msg):
         print(f"\033[34m{msg}\033[0m")
 
     @staticmethod
-    def _red(msg):
+    def red(msg):
         print(f"\033[31m{msg}\033[0m")
 
     @staticmethod
-    def _yellow(msg):
+    def yellow(msg):
         print(f"\033[33m{msg}\033[0m")
 
     @staticmethod
-    def _debug(msg):
+    def debug(msg):
         print(f"\033[90m{msg}\033[0m")
 
 
 class EventMonitor:
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, *args, **kwargs):
         self.config = config
         self.client = Client(config.server.url)
 
+        # Locks and flags
         self._lock = threading.RLock()
         self._loading = True
+        self._normalizing = False
 
+        # CallBacks
         self._order_change_listeners: set[Callable[[Any], None]] = set()
         self._pos_change_listeners: set[Callable[[Any], None]] = set()
 
+        # Slots and connections cache
+        self.input_slot = HardwareSlot(ports=[], is_input=True)
+        self.output_slot = HardwareSlot(ports=[], is_input=False)
+        self.slots: list[PluginSlot] = []
+        self._connections: set[tuple[str, str]] = set()
+
+        self._layout_manager = GridLayoutManager()
+
         self._subscribe()
+
+    @property
+    def normalizing(self):
+        return self._normalizing
+
+    @normalizing.setter
+    def normalizing(self, value: bool):
+        self._normalizing = value
+        # if not value:
+        #     self._reorder_slots_by_pos()
 
     def run(self):
         self.client.ws.connect()
@@ -282,34 +303,182 @@ class EventMonitor:
             listeners_set.add(ref)
 
     def _on_loading_start(self, event: LoadingStartEvent):
-        print("E", event)
         with self._lock:
+            if not self._loading:
+                _Color.red("\u25a0 Reloading detected")
+            _Color.yellow("\u25f7 Loading start, initializing...")
             self._loading = True
-        _Color._yellow("\u25f7 Loading start, initializing...")
+            self._connections.clear()
 
     def _on_loading_end(self, event: LoadingEndEvent):
+        _Color.info("\u25cf Loading end, monitoring...")
         with self._lock:
             self._loading = False
-        _Color._info("\u25cf Loading end, monitoring...")
+        if not self._loading:
+            self._reorder_slots_by_pos()
 
     def _on_graph_hw_port_add(self, event: GraphAddHwPortEvent):
+        """
+        Handle hardware port added via WebSocket feedback.
+        Updates hardware slots.
+        """
         type_ = "Out" if event.is_output else "In"
-        _Color._blue(f"+ HW {type_:<3}: {event.name}")
+        _Color.blue(f"+ HW {type_:<3}: {event.name}")
+        hw_config = self.config.hardware
+
+        if event.is_output:
+            slot = self.output_slot
+        else:
+            slot = self.input_slot
+
+        if event.name not in hw_config.disable_ports:
+            if event.name not in slot._ports:
+                slot._ports.append(event.name)
 
     def _on_graph_plugin_add(self, event: GraphPluginAddEvent):
-        _Color._blue(f"+ Plugin: {event.label}")
+        """
+        Handle plugin added via WebSocket feedback.
+        Creates Slot, fetches port info, connects to chain.
+        """
+        _Color.blue(f"+ Plugin: {event.label}")
+
+        # Перевіряємо чи такий слот вже існує
+        slot = self._find_slot_by_label(event.label)
+        if not slot:
+            # Just update position
+            plugin = Plugin.load_supported(
+                self.client,
+                uri=event.uri,
+                label=event.label,
+                config=self.config,
+            )
+
+            if not plugin:
+                _Color.red(f"Can not load plugin: {event.label}, {event.uri}")
+                return
+
+            # Створюємо слот
+            slot = PluginSlot(
+                plugin,
+                event.x if event.x is not None else 0,
+                event.y if event.y is not None else 0,
+            )
+
+        with self._lock:
+            # Додаємо слот
+            self.slots.append(slot)
+
+        if not self._loading:
+            self._reorder_slots_by_pos(force=True)
 
     def _on_graph_plugin_remove(self, event: GraphPluginRemoveEvent):
-        _Color._red(f"- Plugin: {event.label}")
+        """
+        Handle plugin removed via WebSocket feedback.
+        Updates local graph state ONLY.
+        """
+        _Color.red(f"- Plugin: {event.label}")
+
+        slot = self._find_slot_by_label(event.label)
+        if not slot:
+            return
+
+        with self._lock:
+            self.slots.remove(slot)
+            print(f"  Removed slot: {event.label}")
+
+        if not self._loading:
+            self._reorder_slots_by_pos()
 
     def _on_graph_connect(self, event: GraphConnectEvent):
-        _Color._blue(f"\u221e Connected: {event.src_path} \u21e2 {event.dst_path}")
+        _Color.blue(f"\u221e Connected: {event.src_path} \u21e2 {event.dst_path}")
+        with self._lock:
+            pair = (event.src_path, event.dst_path)
+            if pair not in self._connections:
+                self._connections.add(pair)
+                print(f"[Cache] Connected: {event.src_path} -> {event.dst_path}")
 
     def _on_graph_disconnect(self, event: GraphDisconnectEvent):
-        _Color._red(f"\u22b6 Disconnected: {event.src_path} \u2307 {event.dst_path}")
+        _Color.red(f"\u22b6 Disconnected: {event.src_path} \u2307 {event.dst_path}")
+        with self._lock:
+            pair = (event.src_path, event.dst_path)
+            self._connections.discard(pair)
+            print(f"[Cache] Disconnected: {event.src_path} -> {event.dst_path}")
 
     def _on_position_change(self, event: GraphPluginPosEvent):
-        _Color._yellow(f"\u2316 Pos: {event.label}, ({event.x}, {event.y})")
+        _Color.yellow(f"\u2316 Pos: {event.label}, ({event.x}, {event.y})")
+        """
+        Handle position change from WebSocket.
+        Updates slot position and reorders slots based on new coordinates.
+        """
+        # Skip position updates during normalization (we're sending, not receiving)
+        slot = self._find_slot_by_label(event.label)
+        if not slot:
+            return
+
+        with self._lock:
+            # NOTE: we should ensure that plugin already got an update
+            old_pos = (slot.pos_x, slot.pos_y)
+            x, y = (event.x, event.y)
+            if slot.is_pos_changed((x, y)):
+                _Color.yellow(f"\u21bb Normalizing: {old_pos} -> {(x, y)}")
+                slot.pos_x = x
+                slot.pos_y = y
+
+        if not self._loading and not self.normalizing:
+            self._reorder_slots_by_pos()
+
+    def _normalize(self):
+        _Color.info("\u21bb Normalization...")
+        if self._loading:
+            return
+
+        new_positions = self._layout_manager.normalize(self.slots)
+
+        self.normalizing = True
+
+        for slot, (x, y) in new_positions.items():
+            old_pos = (slot.pos_x, slot.pos_y)
+            _Color.yellow(f"\u21bb Normalizing: {old_pos} -> {(x, y)}")
+            if slot.is_pos_changed((x, y)):
+                slot.pos_x = x
+                slot.pos_y = y
+                # Need small delay before server be able to react
+                time.sleep(0.1)
+                self.client.effect_position(slot.label, x, y)
+
+        time.sleep(0.1)
+        self.normalizing = False
+
+
+    def _reorder_slots_by_pos(self, /, force=False):
+        with self._lock:
+            # sort slots by pos
+            old_order = [s.label for s in self.slots]
+            self.slots = self._layout_manager.sort_slots(self.slots)
+            new_order = [s.label for s in self.slots]
+
+            # then normalize
+            self._normalize()
+
+            # check order changed
+            if old_order != new_order or force:
+                _Color.info("\u21c5 Slots order changed")
+                # then if order was changed process callbacks
+                dead: set[Callable[[Any], None]] = set()
+
+                for ref in self._order_change_listeners:
+                    cb = ref()
+                    if cb is None:
+                        dead.add(ref)
+                    else:
+                        cb(None)
+
+    def _find_slot_by_label(self, label: str) -> PluginSlot | None:
+        """Find slot by its plugin label."""
+        for slot in self.slots:
+            if slot.label == label:
+                return slot
+        return None
 
 
 class Rack:
@@ -551,23 +720,6 @@ class Rack:
             return
 
         with self._lock:
-            # 1. Очищуємо кеш з'єднань від усіх портів цього плагіна
-            # Шукаємо з'єднання, де шлях починається з /graph/label/
-            prefix = f"{event.label}/"
-
-            to_remove = {
-                pair
-                for pair in self._connections
-                if pair[0].startswith(prefix) or pair[1].startswith(prefix)
-            }
-
-            for pair in to_remove:
-                self._connections.discard(pair)
-                print(
-                    f"  [Cache Cleanup] Removed stale connection: {pair[0]} -> {pair[1]}"
-                )
-
-            # 2. Видаляємо сам слот
             self.slots.remove(slot)
             print(f"  Removed slot: {event.label}")
 
