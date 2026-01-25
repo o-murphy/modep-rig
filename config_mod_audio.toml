@@ -1,0 +1,439 @@
+# config.toml
+
+[server]
+url = "http://127.0.0.1:18181/"
+# url = "http://192.168.88.247:80/"
+# url = "https://try.mod.audio/"
+
+[hardware]
+# disable_ports = ["capture_1"] #, "capture_2"]
+# All-to-all routing: connect all hardware inputs to all first plugin inputs
+# join_inputs = true
+# All-to-all routing: connect all last plugin outputs to all hardware outputs
+# join_outputs = true
+
+[rack]
+slot_count = 4
+
+# =============================================================================
+# Plugins
+# =============================================================================
+
+
+[[plugins]]
+name = "DS1"
+uri = "http://moddevices.com/plugins/mod-devel/DS1"
+category = "distortion"
+
+[[plugins]]
+name = "KlonCentaur"
+uri = "https://github.com/jatinchowdhury18/KlonCentaur"
+category = "overdrive"
+
+[[plugins]]
+name = "BigMuffPi"
+uri = "http://moddevices.com/plugins/mod-devel/BigMuffPi"
+category = "distortion"
+
+[[plugins]]
+name = "Schrammel OJD"
+uri = "https://github.com/JanosGit/Schrammel_OJD"
+category = "overdrive"
+
+[[plugins]]
+name = "Paranoia"
+uri = "http://remaincalm.org/plugins/paranoia"
+category = "distortion"
+
+
+# --- Delay (original) ---
+
+
+# =============================================================================
+# Plugins (from server)
+# =============================================================================
+
+[[plugins]]
+name = "C* PhaserII - Mono phaser modulated by a Lorenz fractal"
+uri = "http://moddevices.com/plugins/caps/PhaserII"
+category = "modulator"
+[[plugins]]
+name = "C* Plate - Versatile plate reverb"
+uri = "http://moddevices.com/plugins/caps/Plate"
+category = "reverb"
+[[plugins]]
+name = "C* PlateX2 - Stereo in/out Versatile plate reverb"
+uri = "http://moddevices.com/plugins/caps/PlateX2"
+category = "reverb"
+[[plugins]]
+name = "C* Scape - Stereo delay + Filters"
+uri = "http://moddevices.com/plugins/caps/Scape"
+category = "delay"
+[[plugins]]
+name = "C* Spice"
+uri = "http://moddevices.com/plugins/caps/Spice"
+category = "dynamics"
+[[plugins]]
+name = "C* SpiceX2"
+uri = "http://moddevices.com/plugins/caps/SpiceX2"
+category = "dynamics"
+[[plugins]]
+name = "C* White - White noise generator"
+uri = "http://moddevices.com/plugins/caps/White"
+category = "generator"
+[[plugins]]
+name = "MDA BeatBox"
+uri = "http://moddevices.com/plugins/mda/BeatBox"
+category = "generator"
+[[plugins]]
+name = "MDA DX10"
+uri = "http://moddevices.com/plugins/mda/DX10"
+category = "generator"
+[[plugins]]
+name = "MDA Detune"
+uri = "http://moddevices.com/plugins/mda/Detune"
+category = "spectral"
+[[plugins]]
+name = "MDA ePiano"
+uri = "http://moddevices.com/plugins/mda/EPiano"
+category = "generator"
+[[plugins]]
+name = "MDA JX10"
+uri = "http://moddevices.com/plugins/mda/JX10"
+category = "generator"
+[[plugins]]
+name = "MDA Piano"
+uri = "http://moddevices.com/plugins/mda/Piano"
+category = "generator"
+[[plugins]]
+name = "MDA Shepard"
+uri = "http://moddevices.com/plugins/mda/Shepard"
+category = "generator"
+[[plugins]]
+name = "MDA SubSynth"
+uri = "http://moddevices.com/plugins/mda/SubSynth"
+category = "spectral"
+[[plugins]]
+name = "MDA ThruZero"
+uri = "http://moddevices.com/plugins/mda/ThruZero"
+category = "modulator"
+[[plugins]]
+name = "MDA Vocoder"
+uri = "http://moddevices.com/plugins/mda/Vocoder"
+category = "spectral"
+[[plugins]]
+name = "BandPassFilter"
+uri = "http://moddevices.com/plugins/mod-devel/BandPassFilter"
+category = "filter"
+[[plugins]]
+name = "Capo"
+uri = "http://moddevices.com/plugins/mod-devel/Capo"
+category = "spectral"
+[[plugins]]
+name = "CrossOver 2"
+uri = "http://moddevices.com/plugins/mod-devel/CrossOver2"
+category = "filter"
+[[plugins]]
+name = "CrossOver 3"
+uri = "http://moddevices.com/plugins/mod-devel/CrossOver3"
+category = "filter"
+[[plugins]]
+name = "Gain"
+uri = "http://moddevices.com/plugins/mod-devel/Gain"
+category = "utility"
+[[plugins]]
+name = "Harmonizer"
+uri = "http://moddevices.com/plugins/mod-devel/Harmonizer"
+category = "spectral"
+[[plugins]]
+name = "Harmonizer2"
+uri = "http://moddevices.com/plugins/mod-devel/Harmonizer2"
+category = "spectral"
+[[plugins]]
+name = "HighPassFilter"
+uri = "http://moddevices.com/plugins/mod-devel/HighPassFilter"
+category = "filter"
+[[plugins]]
+name = "LowPassFilter"
+uri = "http://moddevices.com/plugins/mod-devel/LowPassFilter"
+category = "filter"
+[[plugins]]
+name = "MIDI SwitchBox 1-2"
+uri = "http://moddevices.com/plugins/mod-devel/MIDI-Switchbox_1-2"
+category = "midi"
+[[plugins]]
+name = "Super Capo"
+uri = "http://moddevices.com/plugins/mod-devel/SuperCapo"
+category = "spectral"
+[[plugins]]
+name = "Super Whammy"
+uri = "http://moddevices.com/plugins/mod-devel/SuperWhammy"
+category = "spectral"
+[[plugins]]
+name = "Switchbox 1-2"
+uri = "http://moddevices.com/plugins/mod-devel/SwitchBox2"
+category = "utility"
+[[plugins]]
+name = "ToggleSwitch"
+uri = "http://moddevices.com/plugins/mod-devel/ToggleSwitch4"
+category = "utility"
+[[plugins]]
+name = "Arpeggiator"
+uri = "http://moddevices.com/plugins/mod-devel/arpeggiator"
+category = "midi"
+[[plugins]]
+name = "Logic Operators"
+uri = "http://moddevices.com/plugins/mod-devel/logic-operators"
+category = "controlvoltage"
+[[plugins]]
+name = "MIDI SwitchBox 1-2 2C"
+uri = "http://moddevices.com/plugins/mod-devel/midi-switchbox_1-2_2C"
+category = "midi"
+[[plugins]]
+name = "MIDI SwitchBox 1-3"
+uri = "http://moddevices.com/plugins/mod-devel/midi-switchbox_1-3"
+category = "midi"
+[[plugins]]
+name = "MIDI SwitchBox 2-1"
+uri = "http://moddevices.com/plugins/mod-devel/midi-switchbox_2-1"
+category = "midi"
+[[plugins]]
+name = "MIDI SwitchBox 2-1 2C"
+uri = "http://moddevices.com/plugins/mod-devel/midi-switchbox_2-1_2C"
+category = "midi"
+[[plugins]]
+name = "MIDI SwitchBox 3-1"
+uri = "http://moddevices.com/plugins/mod-devel/midi-switchbox_3-1"
+category = "midi"
+[[plugins]]
+name = "MIDI to CV mono"
+uri = "http://moddevices.com/plugins/mod-devel/midi-to-cv-mono"
+category = "controlvoltage"
+[[plugins]]
+name = "MIDI to CV Poly"
+uri = "http://moddevices.com/plugins/mod-devel/midi-to-cv-poly"
+category = "controlvoltage"
+[[plugins]]
+name = "Mixer"
+uri = "http://moddevices.com/plugins/mod-devel/mixer"
+category = "utility"
+[[plugins]]
+name = "Mixer Stereo"
+uri = "http://moddevices.com/plugins/mod-devel/mixer-stereo"
+category = "utility"
+[[plugins]]
+name = "Audio to CV"
+uri = "http://moddevices.com/plugins/mod-devel/mod-audio-to-cv"
+category = "controlvoltage"
+[[plugins]]
+name = "Multi Button to CV"
+uri = "http://moddevices.com/plugins/mod-devel/mod-button-to-cv"
+category = "controlvoltage"
+[[plugins]]
+name = "CV ABS"
+uri = "http://moddevices.com/plugins/mod-devel/mod-cv-abs"
+category = "controlvoltage"
+[[plugins]]
+name = "Attenuverter Booster"
+uri = "http://moddevices.com/plugins/mod-devel/mod-cv-attenuverter"
+category = "controlvoltage"
+[[plugins]]
+name = "CV Clock"
+uri = "http://moddevices.com/plugins/mod-devel/mod-cv-clock"
+category = "controlvoltage"
+[[plugins]]
+name = "Control to CV"
+uri = "http://moddevices.com/plugins/mod-devel/mod-cv-control"
+category = "controlvoltage"
+[[plugins]]
+name = "CV Gate"
+uri = "http://moddevices.com/plugins/mod-devel/mod-cv-gate"
+category = "controlvoltage"
+[[plugins]]
+name = "CV meter"
+uri = "http://moddevices.com/plugins/mod-devel/mod-cv-meter"
+category = "controlvoltage"
+[[plugins]]
+name = "CV Parameter Modulation"
+uri = "http://moddevices.com/plugins/mod-devel/mod-cv-parameter-modulation"
+category = "controlvoltage"
+[[plugins]]
+name = "Random Generator"
+uri = "http://moddevices.com/plugins/mod-devel/mod-cv-random"
+category = "controlvoltage"
+[[plugins]]
+name = "CV Range Divider"
+uri = "http://moddevices.com/plugins/mod-devel/mod-cv-range"
+category = "controlvoltage"
+[[plugins]]
+name = "CV Round"
+uri = "http://moddevices.com/plugins/mod-devel/mod-cv-round"
+category = "controlvoltage"
+[[plugins]]
+name = "Slew Rate Limiter"
+uri = "http://moddevices.com/plugins/mod-devel/mod-cv-slew"
+category = "controlvoltage"
+[[plugins]]
+name = "CV Switchbox 1-2"
+uri = "http://moddevices.com/plugins/mod-devel/mod-cv-switch1"
+category = "controlvoltage"
+[[plugins]]
+name = "CV Switchbox 2-1"
+uri = "http://moddevices.com/plugins/mod-devel/mod-cv-switch2"
+category = "controlvoltage"
+[[plugins]]
+name = "CV Switchbox 1-3"
+uri = "http://moddevices.com/plugins/mod-devel/mod-cv-switch3"
+category = "controlvoltage"
+[[plugins]]
+name = "CV Switchbox 3-1"
+uri = "http://moddevices.com/plugins/mod-devel/mod-cv-switch4"
+category = "controlvoltage"
+[[plugins]]
+name = "Switchbox 1-2 ST"
+uri = "http://moddevices.com/plugins/mod-devel/switchbox_1-2_st"
+category = "utility"
+[[plugins]]
+name = "Switchbox 2-1"
+uri = "http://moddevices.com/plugins/mod-devel/switchbox_2-1"
+category = "utility"
+[[plugins]]
+name = "Switchbox 2-1 ST"
+uri = "http://moddevices.com/plugins/mod-devel/switchbox_2-1_st"
+category = "utility"
+[[plugins]]
+name = "SooperLooper"
+uri = "http://moddevices.com/plugins/sooperlooper"
+category = "utility"
+[[plugins]]
+name = "SooperLooper 2x2"
+uri = "http://moddevices.com/plugins/sooperlooper-2x2"
+category = "utility"
+[[plugins]]
+name = "TAP Chorus/Flanger"
+uri = "http://moddevices.com/plugins/tap/chorusflanger"
+category = "modulator"
+[[plugins]]
+name = "TAP Fractal Doubler"
+uri = "http://moddevices.com/plugins/tap/doubler"
+category = "spectral"
+[[plugins]]
+name = "TAP Stereo Echo"
+uri = "http://moddevices.com/plugins/tap/echo"
+category = "delay"
+[[plugins]]
+name = "TAP Pink/Fractal Noise"
+uri = "http://moddevices.com/plugins/tap/pinknoise"
+category = "generator"
+[[plugins]]
+name = "TAP Reflector"
+uri = "http://moddevices.com/plugins/tap/reflector"
+category = "delay"
+[[plugins]]
+name = "TAP Tremolo"
+uri = "http://moddevices.com/plugins/tap/tremolo"
+category = "modulator"
+[[plugins]]
+name = "TAP Tubewarmth"
+uri = "http://moddevices.com/plugins/tap/tubewarmth"
+category = "simulator"
+[[plugins]]
+name = "Notes"
+uri = "http://open-music-kontrollers.ch/lv2/notes#notes"
+category = "utility"
+[[plugins]]
+name = "avocado"
+uri = "http://remaincalm.org/plugins/avocado"
+category = "delay"
+[[plugins]]
+name = "floaty"
+uri = "http://remaincalm.org/plugins/floaty"
+category = "delay"
+[[plugins]]
+name = "mud"
+uri = "http://remaincalm.org/plugins/mud"
+category = "filter"
+[[plugins]]
+name = "Filta"
+uri = "http://www.openavproductions.com/artyfx#filta"
+category = "filter"
+[[plugins]]
+name = "Kuiza"
+uri = "http://www.openavproductions.com/artyfx#kuiza"
+category = "filter"
+[[plugins]]
+name = "Roomy"
+uri = "http://www.openavproductions.com/artyfx#roomy"
+category = "reverb"
+[[plugins]]
+name = "AudioToCV Pitch"
+uri = "https://distrho.kx.studio/plugins/pitchtracking#cv"
+category = "controlvoltage"
+[[plugins]]
+name = "Record-Mono Mini"
+uri = "https://github.com/brummer10/screcord#mono_record_mini"
+category = "utility"
+[[plugins]]
+name = "Record-Quad Mini"
+uri = "https://github.com/brummer10/screcord#quad_record_mini"
+category = "utility"
+[[plugins]]
+name = "Record-Stereo Mini"
+uri = "https://github.com/brummer10/screcord#stereo_record_mini"
+category = "utility"
+[[plugins]]
+name = "Harmless"
+uri = "https://github.com/ninodewit/SHIRO-Plugins/plugins/harmless"
+category = "modulator"
+[[plugins]]
+name = "Larynx"
+uri = "https://github.com/ninodewit/SHIRO-Plugins/plugins/larynx"
+category = "modulator"
+[[plugins]]
+name = "Modulay"
+uri = "https://github.com/ninodewit/SHIRO-Plugins/plugins/modulay"
+category = "delay"
+[[plugins]]
+name = "Shiroverb"
+uri = "https://github.com/ninodewit/SHIRO-Plugins/plugins/shiroverb"
+category = "reverb"
+[[plugins]]
+name = "Wolf Shaper"
+uri = "https://github.com/pdesaulniers/wolf-shaper"
+category = "distortion"
+[[plugins]]
+name = "Cabinet Loader"
+uri = "https://mod.audio/plugins/CabinetLoader"
+category = "simulator"
+[[plugins]]
+name = "Convolution Loader"
+uri = "https://mod.audio/plugins/ConvolutionLoader"
+category = "reverb"
+[[plugins]]
+name = "Neural Record"
+uri = "urn:brummer10:neuralrecord"
+category = "utility"
+[[plugins]]
+name = "DIE Fluid Synth"
+uri = "urn:distrho:a-fluidsynth"
+category = "generator"
+[[plugins]]
+name = "Dragonfly Early Reflections"
+uri = "urn:dragonfly:early"
+category = "reverb"
+[[plugins]]
+name = "Dragonfly Plate Reverb"
+uri = "urn:dragonfly:plate"
+category = "reverb"
+[[plugins]]
+name = "Dragonfly Room Reverb"
+uri = "urn:dragonfly:room"
+category = "reverb"
+[[plugins]]
+name = "ZamComp"
+uri = "urn:zamaudio:ZamComp"
+category = "dynamics"
+[[plugins]]
+name = "ZamCompX2"
+uri = "urn:zamaudio:ZamCompX2"
+category = "dynamics"

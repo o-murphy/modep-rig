@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 try:
-    import tomllib  # Python 3.11+
+    import tomllib  # type: ignore[import-not-found]  # Python 3.11+
 except ImportError:
     import tomli as tomllib  # pip install tomli for Python < 3.11
 
@@ -11,7 +11,7 @@ __all__ = [
     "PluginConfig",
     "HardwareConfig",
     "ServerConfig",
-    "RigConfig",
+    "RackConfig",
     "Config",
 ]
 
@@ -22,8 +22,7 @@ class PluginConfig:
     uri: str
     category: str = ""
     # Опціональні override для портів (для моно/стерео конверсії)
-    inputs: list[str] | None = None
-    outputs: list[str] | None = None
+    disable_ports: list[str] = field(default_factory=list)
     # Явний режим каналів: "mono", "stereo", або None (авто)
     mode: str | None = None
     # All-to-all routing: з'єднати всі входи/виходи між собою
@@ -33,8 +32,11 @@ class PluginConfig:
 
 @dataclass
 class HardwareConfig:
-    inputs: list[str] = field(default_factory=lambda: ["capture_1", "capture_2"])
-    outputs: list[str] = field(default_factory=lambda: ["playback_1", "playback_2"])
+    # None = auto-detect from MOD-UI, list = override with specific ports
+    disable_ports: list[str] = field(default_factory=list)
+    # All-to-all routing for hardware ports
+    join_inputs: bool = False  # Join all hardware inputs to first plugin
+    join_outputs: bool = False  # Join last plugin outputs to all hardware outputs
 
 
 @dataclass
@@ -43,15 +45,16 @@ class ServerConfig:
 
 
 @dataclass
-class RigConfig:
-    slot_count: int = 4
+class RackConfig:
+    # Maximum number of slots allowed (None = unlimited)
+    slots_limit: int | None = None
 
 
 @dataclass
 class Config:
     server: ServerConfig = field(default_factory=ServerConfig)
     hardware: HardwareConfig = field(default_factory=HardwareConfig)
-    rig: RigConfig = field(default_factory=RigConfig)
+    rack: RackConfig = field(default_factory=RackConfig)
     plugins: list[PluginConfig] = field(default_factory=list)
 
     @classmethod
@@ -67,26 +70,36 @@ class Config:
             data = tomllib.load(f)
 
         server = ServerConfig(**data.get("server", {}))
-        hardware = HardwareConfig(**data.get("hardware", {}))
-        rig = RigConfig(**data.get("rig", {}))
+        hw_data = data.get("hardware", {})
+        hardware = HardwareConfig(
+            disable_ports=hw_data.get("disable_ports", []),  # None = auto-detect
+            join_inputs=hw_data.get("join_inputs", False),
+            join_outputs=hw_data.get("join_outputs", False),
+        )
+        rack_data = data.get("rack", {})
+        rack = RackConfig(
+            slots_limit=rack_data.get("slots_limit")
+            or rack_data.get("slot_count"),  # backward compat
+        )
 
         plugins = []
         for p in data.get("plugins", []):
-            plugins.append(PluginConfig(
-                name=p["name"],
-                uri=p["uri"],
-                category=p.get("category", ""),
-                inputs=p.get("inputs"),
-                outputs=p.get("outputs"),
-                mode=p.get("mode"),
-                join_inputs=p.get("join_inputs", False),
-                join_outputs=p.get("join_outputs", False),
-            ))
+            plugins.append(
+                PluginConfig(
+                    name=p["name"],
+                    uri=p["uri"],
+                    category=p.get("category", ""),
+                    disable_ports=p.get("disable_ports", []),
+                    mode=p.get("mode"),
+                    join_inputs=p.get("join_inputs", False),
+                    join_outputs=p.get("join_outputs", False),
+                )
+            )
 
         return cls(
             server=server,
             hardware=hardware,
-            rig=rig,
+            rack=rack,
             plugins=plugins,
         )
 

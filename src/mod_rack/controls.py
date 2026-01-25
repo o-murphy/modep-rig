@@ -263,7 +263,9 @@ class ControlPort:
             default=float(ranges.get("default", 0.0)),
             properties=ControlProperties.from_list(data.get("properties", [])),
             scale_points=tuple(
-                ScalePoint.from_dict(sp) for sp in scale_points_data if sp.get("valid", True)
+                ScalePoint.from_dict(sp)
+                for sp in scale_points_data
+                if sp.get("valid", True)
             ),
             units=Units.from_dict(units_data),
             range_steps=data.get("rangeSteps", 0),
