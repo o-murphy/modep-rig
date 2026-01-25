@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QTimer, QObject
 
 from mod_rack import Config, Rack, ControlPort
-from mod_rack.rack import PluginSlot
+from mod_rack.rack import OrchestratorMode, PluginSlot
 
 
 class ControlWidget(QWidget):
@@ -743,7 +743,7 @@ def main():
     parser.add_argument(
         "--config", "-c", help="Config", type=Path, default="config.toml"
     )
-    parser.add_argument("--master", "-m", help="Master", action="store_true")
+    parser.add_argument("--slave", help="Slave", action="store_true")
     args = parser.parse_args()
 
     config = Config.load(args.config)
@@ -753,7 +753,7 @@ def main():
 
     # Create rack (do not force reset on init — build state from WebSocket)
     print("Connecting to MOD server...")
-    rack = Rack(config)
+    rack = Rack(config, OrchestratorMode.OBSERVER if args.slave else OrchestratorMode.MANAGER)
 
     # Create and run app
     app = QApplication(sys.argv)
@@ -762,8 +762,12 @@ def main():
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
     window = MainWindow(rack)
-    if args.master:
-        window.setWindowTitle(window.windowTitle() + " (MASTER)")
+    title = window.windowTitle()
+    if args.slave:
+        window.setWindowTitle(title + " (SLAVE)")
+    else:
+        window.setWindowTitle(title + " (MASTER)")
+
     window.show()
 
     # Timer for Ctrl+C on Linux/Windows

@@ -31,7 +31,15 @@ OnRackOrderChangeCallbackRef: TypeAlias = (
     | weakref.WeakMethod[OnRackOrderChangeCallback]
 )
 
-__all__ = ["PluginSlot", "HardwareSlot", "Rack", "Orchestrator", "OrchestratorMode"]
+__all__ = [
+    "PluginSlot",
+    "HardwareSlot",
+    "Rack",
+    "Orchestrator",
+    "OrchestratorMode",
+    "GridLayoutManager",
+    "RoutingManager",
+]
 
 
 # =============================================================================
@@ -71,6 +79,14 @@ class PluginSlot:
     @property
     def outputs(self) -> list[str]:
         return [p.graph_path for p in self.plugin.outputs]
+
+    @property
+    def join_outputs(self) -> bool:
+        return self.plugin.join_outputs
+
+    @property
+    def join_inputs(self) -> bool:
+        return self.plugin.join_inputs
 
     @staticmethod
     def _label_from_uri(uri: str) -> str:
@@ -133,6 +149,28 @@ class HardwareSlot:
 
 
 AnySlot = HardwareSlot | PluginSlot
+
+
+class _Color:
+    @staticmethod
+    def info(msg):
+        print(f"\033[32m{msg}\033[0m")
+
+    @staticmethod
+    def blue(msg):
+        print(f"\033[34m{msg}\033[0m")
+
+    @staticmethod
+    def red(msg):
+        print(f"\033[31m{msg}\033[0m")
+
+    @staticmethod
+    def yellow(msg):
+        print(f"\033[33m{msg}\033[0m")
+
+    @staticmethod
+    def debug(msg):
+        print(f"\033[90m{msg}\033[0m")
 
 
 # =============================================================================
@@ -314,35 +352,71 @@ class GridLayoutManager:
         return (float(cls.BASE_X), float(cls.BASE_Y + len(rows) * cls.Y_STEP))
 
 
+# =============================================================================
+# GridLayoutManager
+# =============================================================================
+
+
 class RoutingManager:
-    pass
+    """
+    Stateless manager для розрахунку з'єднань у графі.
+    Не керує станом, лише повертає набори портів.
+    """
+
+    @classmethod
+    def get_connection_pairs(cls, src: AnySlot, dst: AnySlot) -> list[tuple[str, str]]:
+        """Розраховує пари (вихід, вхід) між двома слотами."""
+        outputs = src.outputs
+        inputs = dst.inputs
+
+        if not outputs or not inputs:
+            return []
+
+        # Визначаємо прапори об'єднання (join)
+        join_outputs = src.join_outputs
+        join_inputs = dst.join_inputs
+
+        connections = []
+
+        if join_outputs or join_inputs:
+            # All-to-all: кожен вихід з кожним входом
+            for out in outputs:
+                for inp in inputs:
+                    connections.append((out, inp))
+        else:
+            # Pair-by-index: 1-1, 2-2, а надлишок до останнього
+            for i, out in enumerate(outputs):
+                in_idx = min(i, len(inputs) - 1)
+                connections.append((out, inputs[in_idx]))
+
+            if len(inputs) > len(outputs):
+                last_out = outputs[-1]
+                for inp in inputs[len(outputs) :]:
+                    connections.append((last_out, inp))
+
+        return connections
+
+    @classmethod
+    def calculate_chain_connections(
+        cls,
+        slots: list[PluginSlot],
+        input_slot: HardwareSlot,
+        output_slot: HardwareSlot,
+    ) -> set[tuple[str, str]]:
+        """Повертає повний набір бажаних з'єднань для всього ланцюга."""
+        desired = set()
+        chain = [input_slot] + slots + [output_slot]
+
+        for i in range(len(chain) - 1):
+            pairs = cls.get_connection_pairs(chain[i], chain[i + 1])
+            desired.update(pairs)
+
+        return desired
 
 
 # =============================================================================
-# Rack
+# Orchestrator
 # =============================================================================
-
-
-class _Color:
-    @staticmethod
-    def info(msg):
-        print(f"\033[32m{msg}\033[0m")
-
-    @staticmethod
-    def blue(msg):
-        print(f"\033[34m{msg}\033[0m")
-
-    @staticmethod
-    def red(msg):
-        print(f"\033[31m{msg}\033[0m")
-
-    @staticmethod
-    def yellow(msg):
-        print(f"\033[33m{msg}\033[0m")
-
-    @staticmethod
-    def debug(msg):
-        print(f"\033[90m{msg}\033[0m")
 
 
 class OrchestratorMode(Enum):
@@ -352,7 +426,7 @@ class OrchestratorMode(Enum):
 
 class Orchestrator:
     def __init__(
-        self, config: Config, mode: OrchestratorMode = OrchestratorMode.OBSERVER
+        self, config: Config, mode: OrchestratorMode = OrchestratorMode.MANAGER
     ):
         self.mode = mode
         self.config = config
@@ -540,7 +614,7 @@ class Orchestrator:
         if self._loading:
             return
 
-        if self.mode == OrchestratorMode.OBSERVER and not force:
+        if self.mode != OrchestratorMode.MANAGER and not force:
             return
 
         _Color.info("\u21bb Normalization...")
@@ -563,6 +637,11 @@ class Orchestrator:
                 self.normalizing = False
 
     def _reorder_slots_by_pos(self, /, force_emit=False):
+        self.reconnect_seamless()
+
+        if self.mode != OrchestratorMode.MANAGER:
+            return
+
         with self._lock:
             # sort slots by pos
             old_order = [s.label for s in self.slots]
@@ -574,7 +653,7 @@ class Orchestrator:
 
         with self._lock:
             # check order changed
-            if old_order != new_order or force_emit:
+            if old_order != new_order or force_emit or (not self.slots and old_order):
                 self._order_changed_emit()
 
     def _schedule_reorder(self, /, force_emit: bool = False):
@@ -608,6 +687,65 @@ class Orchestrator:
                 return slot
         return None
 
+    # =========================================================================
+    # Routing
+    # =========================================================================
+
+    def reconnect_seamless(self):
+        """Синхронізує поточні з'єднання на сервері з розрахованим ідеалом."""
+        if self._loading:
+            return
+
+        with self._lock:
+            # 1. Отримуємо "ідеальний" стан від менеджера
+            desired = RoutingManager.calculate_chain_connections(
+                self.slots, self.input_slot, self.output_slot
+            )
+
+            # 2. Обчислюємо різницю з кешем Orchestrator
+            to_connect = desired - self._connections
+            to_disconnect = self._connections - desired
+
+            if not to_connect and not to_disconnect:
+                return
+
+            _Color.info("--- Syncing Graph ---")
+            for out_p, in_p in to_connect:
+                self.client.effect_connect(out_p, in_p)
+
+            for out_p, in_p in to_disconnect:
+                self.client.effect_disconnect(out_p, in_p)
+
+        print("=== RECONNECT SEAMLESS DONE ===\n")
+
+    def _connect_pair(self, src: AnySlot, dst: AnySlot):
+        """Проксі-метод для точкового з'єднання (наприклад, при видаленні плагіна)."""
+        pairs = RoutingManager.get_connection_pairs(src, dst)
+        for out_path, in_path in pairs:
+            # Важливо: ми не додаємо в self._connections самі, чекаємо WS події
+            self.client.effect_connect(out_path, in_path)
+
+    def _disconnect_everything(self):
+        """Видаляє всі активні з'єднання, базуючись на актуальному кеші."""
+        with self._lock:
+            if not self._connections:
+                return
+
+            print(f"  Disconnecting everything: {len(self._connections)} connections")
+
+            # Копіюємо для ітерації
+            current_pairs = list(self._connections)
+            for out_path, in_path in current_pairs:
+                try:
+                    self.client.effect_disconnect(out_path, in_path)
+                except Exception as e:
+                    _Color.red(f"Error disconnecting {out_path} -> {in_path}: {e}")
+
+
+# =============================================================================
+# Rack
+# =============================================================================
+
 
 class Rack(Orchestrator):
     """
@@ -619,12 +757,10 @@ class Rack(Orchestrator):
     - WS handlers: _on_plugin_added(), _on_plugin_removed()
     """
 
-    def __init__(self, config: Config, client: Client | None = None):
-        super().__init__(config=config, mode=OrchestratorMode.MANAGER)
-
-    def _order_changed_emit(self):
-        self.reconnect_seamless()
-        super()._order_changed_emit()
+    def __init__(
+        self, config: Config, mode: OrchestratorMode = OrchestratorMode.MANAGER
+    ):
+        super().__init__(config=config, mode=mode)
 
     # =========================================================================
     # Request API (ініціювання без локальних змін)
@@ -776,173 +912,6 @@ class Rack(Orchestrator):
             self._schedule_reorder(force_emit=True)
 
     # =========================================================================
-    # Routing
-    # =========================================================================
-
-    def reconnect(self):
-        """Rebuild all connections in the chain (break-before-make, causes audio gap)."""
-        print("\n=== RECONNECT ===")
-
-        chain = [self.input_slot] + self.slots + [self.output_slot]
-        print(f"Chain: {' -> '.join(repr(s) for s in chain)}")
-
-        self._disconnect_everything()
-
-        for i in range(len(chain) - 1):
-            self._connect_pair(chain[i], chain[i + 1])
-
-        print("=== RECONNECT DONE ===\n")
-
-    def reconnect_seamless(self):
-        if self._loading:
-            return
-
-        with self._lock:
-            chain = [self.input_slot] + self.slots + [self.output_slot]
-
-            desired = set()
-            for i in range(len(chain) - 1):
-                desired.update(self._get_connection_pairs(chain[i], chain[i + 1]))
-
-            # Ключовий момент: to_connect — це те, чого реально немає в кеші
-            to_connect = desired - self._connections
-            # to_disconnect — це те, що є в кеші, але більше не потрібно
-            to_disconnect = self._connections - desired
-
-            if not to_connect and not to_disconnect:
-                return  # Нічого не змінилося
-
-            print("--- Syncing Graph ---")
-            for out_p, in_p in to_connect:
-                print(f"  [+] Connecting: {out_p} -> {in_p}")
-                self.client.effect_connect(out_p, in_p)
-
-            for out_p, in_p in to_disconnect:
-                print(f"  [-] Disconnecting: {out_p} -> {in_p}")
-                self.client.effect_disconnect(out_p, in_p)
-
-        print("=== RECONNECT SEAMLESS DONE ===\n")
-
-    @classmethod
-    def _get_connection_pairs(cls, src: AnySlot, dst: AnySlot) -> list[tuple[str, str]]:
-        """Calculate connection pairs between src and dst (without connecting)."""
-        outputs = src.outputs
-        inputs = dst.inputs
-
-        if not outputs or not inputs:
-            return []
-
-        # Check join flags
-        join_outputs = False
-        join_inputs = False
-
-        if isinstance(src, HardwareSlot):
-            join_outputs = src.join_outputs
-        elif isinstance(src, PluginSlot) and src.plugin:
-            join_outputs = src.plugin.join_outputs
-
-        if isinstance(dst, HardwareSlot):
-            join_inputs = dst.join_inputs
-        elif isinstance(dst, PluginSlot) and dst.plugin:
-            join_inputs = dst.plugin.join_inputs
-
-        connections = []
-
-        if join_outputs or join_inputs:
-            # All-to-all
-            for out in outputs:
-                for inp in inputs:
-                    connections.append((out, inp))
-        else:
-            # Pair by index
-            for i, out in enumerate(outputs):
-                in_idx = min(i, len(inputs) - 1)
-                connections.append((out, inputs[in_idx]))
-
-            if len(inputs) > len(outputs):
-                last_out = outputs[-1]
-                for inp in inputs[len(outputs) :]:
-                    connections.append((last_out, inp))
-
-        return connections
-
-    def _reconnect_slot(self, slot: PluginSlot):
-        """
-        Connect a slot into the chain (make-before-break).
-
-        1. Connect new slot into chain
-        2. Disconnect old direct path
-        """
-        slot_idx = self.slots.index(slot)
-        if slot_idx < 0:
-            return
-
-        # Find neighbors
-        src = self.input_slot if slot_idx == 0 else self.slots[slot_idx - 1]
-        dst = (
-            self.output_slot
-            if slot_idx == len(self.slots) - 1
-            else self.slots[slot_idx + 1]
-        )
-
-        # Connect new path
-        print(f"  Connect: {src} -> {slot}")
-        self._connect_pair(src, slot)
-
-        print(f"  Connect: {slot} -> {dst}")
-        self._connect_pair(slot, dst)
-
-        # Disconnect old direct path
-        print(f"  Disconnect: {src} -> {dst}")
-        self._disconnect_pair(src, dst)
-
-    def _connect_pair(self, src: AnySlot, dst: AnySlot):
-        """Connect src outputs to dst inputs."""
-        connections = self._get_connection_pairs(src, dst)
-        if not connections:
-            return
-
-        print(f"    Connecting: {connections}")
-        for out_path, in_path in connections:
-            self.client.effect_connect(out_path, in_path)
-
-    def _disconnect_pair(self, src: AnySlot, dst: AnySlot):
-        """Disconnect connections between src and dst."""
-        outputs = src.outputs
-        inputs = dst.inputs
-
-        for out in outputs:
-            for inp in inputs:
-                try:
-                    self.client.effect_disconnect(out, inp)
-                except Exception:
-                    pass
-
-    def _disconnect_everything(self):
-        """
-        Видаляє всі активні з'єднання, про які знає локальний кеш.
-        Використовує O(N) операцій замість перебору всіх портів.
-        """
-        with self._lock:
-            if not self._connections:
-                print("  No active connections to disconnect.")
-                return
-
-            print(f"  Disconnecting everything: {len(self._connections)} connections")
-
-            # Робимо копію списку для ітерації, оскільки WS-події
-            # можуть спробувати змінити set через discard()
-            current_pairs = list(self._connections)
-
-            for out_path, in_path in current_pairs:
-                try:
-                    # Ми не видаляємо з self._connections вручну,
-                    # це зробить _on_graph_disconnect, коли прийде відповідь від сервера.
-                    self.client.effect_disconnect(out_path, in_path)
-                except Exception as e:
-                    print(f"    Error disconnecting {out_path} -> {in_path}: {e}")
-
-    # =========================================================================
     # Convenience API
     # =========================================================================
 
@@ -970,9 +939,30 @@ class Rack(Orchestrator):
         return self.config.get_plugins_by_category(category)
 
     def clear(self):
-        """Request removal of all plugins."""
-        for slot in list(self.slots):
-            self.request_remove_plugin(slot.label)
+        """Request removal of all plugins safely."""
+        with self._lock:
+            if not self.slots:
+                return
+
+            _Color.info("--- Clearing Rack ---")
+
+            # 1. Зупиняємо моніторинг порядку на час масового видалення
+            # (необов'язково, але корисно мати прапор масової операції)
+
+            # 2. Розірвати всі кабелі одним махом, щоб не було тріску
+            # при перепідключенні сусідів, які теж зараз зникнуть
+            self._disconnect_everything()
+
+            # 3. Видаляємо плагіни.
+            # Використовуємо прямий виклик client, щоб уникнути
+            # зайвої логіки "сусідів" у request_remove_plugin
+            labels_to_remove = [slot.label for slot in self.slots]
+
+            for label in labels_to_remove:
+                self.client.effect_remove(label)
+
+            # 4. Примусово оновлюємо стан, якщо хочемо миттєвої реакції
+            # Хоча WS-події прийдуть і самі запустять реордер.
 
     def __repr__(self):
         slots_str = ", ".join(f"{i}:{s.label}" for i, s in enumerate(self.slots))

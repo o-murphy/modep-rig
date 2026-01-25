@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-mod-qrack = "mod_rack.qrack:main"
+mod-rack = "mod_rack.__main__:main"
 
 [dependency-groups]
 dev = [
