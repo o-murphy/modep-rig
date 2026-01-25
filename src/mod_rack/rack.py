@@ -128,42 +128,33 @@ AnySlot = HardwareSlot | PluginSlot
 
 
 class GridLayoutManager:
-    def __init__(
-        self,
-        *,
-        x_step: int = 600,
-        y_step: int = 600,
-        base_x: int = 200,
-        base_y: int = 400,
-        max_per_row: int = 4,
-        y_threshold: float = 150.0,
-    ):
-        """
-        Layout manager for arranging PluginSlots on a grid.
+    """
+    Layout manager for arranging PluginSlots on a grid.
 
-        Args:
-            x_step: Horizontal spacing between plugins.
-            y_step: Vertical spacing between rows.
-            base_x: X coordinate of the first plugin in each row.
-            base_y: Y coordinate of the first row.
-            max_per_row: Maximum number of plugins per row.
-            y_threshold: Maximum Y difference to consider slots in the same row for sorting.
-        """
-        self.x_step = x_step
-        self.y_step = y_step
-        self.base_x = base_x
-        self.base_y = base_y
-        self.max_per_row = max_per_row
-        self.y_threshold = y_threshold
+    Attrs:
+        X_STEP: Horizontal spacing between plugins.
+        Y_STEP: Vertical spacing between rows.
+        BASE_X: X coordinate of the first plugin in each row.
+        BASE_Y: Y coordinate of the first row.
+        Y_THRESHOLD: Maximum Y difference to consider slots in the same row for sorting.
+    """
 
-    def sort_slots(self, slots: list[PluginSlot]) -> list[PluginSlot]:
+    X_STEP = 600
+    Y_STEP = 600
+    BASE_X = 200
+    BASE_Y = 400
+    Y_THRESHOLD = 150.0
+
+    @classmethod
+    def sort_slots(cls, slots: list[PluginSlot]) -> list[PluginSlot]:
         """Реюзимо кластеризацію для отримання плаского відсортованого списку."""
-        rows = self.get_clustered_rows(slots)
+        rows = cls.get_clustered_rows(slots)
         # Просто "сплющуємо" список списків у один список
         return [slot for row in rows for slot in row]
 
+    @classmethod
     def normalize(
-        self, slots: list[PluginSlot]
+        cls, slots: list[PluginSlot]
     ) -> dict[PluginSlot, tuple[float, float]]:
         if not slots:
             return {}
@@ -171,23 +162,24 @@ class GridLayoutManager:
         result = {}
         # 1. Отримуємо не просто список, а список кластерів (рядів)
         # Для цього нам треба трохи змінити або використати внутрішню логіку sort_slots
-        rows = self.get_clustered_rows(slots)
+        rows = cls.get_clustered_rows(slots)
 
         for row_idx, row_slots in enumerate(rows):
             # Кожен кластер отримує свій фіксований Y
-            y = self.base_y + row_idx * self.y_step
+            y = cls.BASE_Y + row_idx * cls.Y_STEP
 
             # Сортуємо плагіни всередині ряду зліва направо
             row_slots.sort(key=lambda s: s.pos_x or 0)
 
             for col_idx, slot in enumerate(row_slots):
                 # Кожен плагін у ряду отримує свій X
-                x = self.base_x + col_idx * self.x_step
+                x = cls.BASE_X + col_idx * cls.X_STEP
                 result[slot] = (x, y)
 
         return result
 
-    def get_clustered_rows(self, slots: list[PluginSlot]) -> list[list[PluginSlot]]:
+    @classmethod
+    def get_clustered_rows(cls, slots: list[PluginSlot]) -> list[list[PluginSlot]]:
         """Допоміжний метод для отримання групованих за Y слотів."""
         if not slots:
             return []
@@ -202,44 +194,48 @@ class GridLayoutManager:
             for i in range(1, len(active)):
                 slot = active[i]
                 avg_y = sum(s.pos_y for s in current_row) / len(current_row)
-                if abs(slot.pos_y - avg_y) <= self.y_threshold:
+                if abs(slot.pos_y - avg_y) <= cls.Y_THRESHOLD:
                     current_row.append(slot)
                 else:
                     current_row = [slot]
                     rows.append(current_row)
         return rows
 
+    @classmethod
     def get_insertion_coords(
-        self, slots: list[PluginSlot], index: int | None = None
+        cls, slots: list[PluginSlot], index: int | None = None
     ) -> tuple[float, float]:
         """
-        Розраховує координати (x, y) для нового або переміщеного слота
-        на основі його майбутнього індексу в загальному списку.
-
-        Args:
-            slots: Поточні слоти.
-            index: Позиція, в яку ми хочемо вставити плагін.
-                   None означає вставку в самий кінець.
+        Розраховує координати на основі візуальних рядів (кластерів).
         """
-        # 1. Отримуємо поточний відсортований порядок
-        ordered_slots = self.sort_slots(slots)
+        rows = cls.get_clustered_rows(slots)
 
-        # 2. Визначаємо фінальний індекс
-        if index is None or index >= len(ordered_slots):
-            target_idx = len(ordered_slots)
-        else:
-            target_idx = max(0, index)
+        # 1. Якщо немає слотів або вставка в самий кінець
+        if not rows or index is None or index >= sum(len(r) for r in rows):
+            row_idx = len(rows) - 1 if rows else 0
+            # Беремо останній ряд
+            target_row = rows[-1] if rows else []
 
-        # 3. Розраховуємо row та col на основі max_per_row
-        # Оскільки normalize використовує idx // max_per_row,
-        # ми маємо дотримуватись цієї ж логіки для передбачуваності.
-        row = target_idx // self.max_per_row
-        col = target_idx % self.max_per_row
+            # Якщо останній ряд не порожній, ставимо ПРАВОРУЧ від останнього
+            if target_row:
+                x = cls.BASE_X + len(target_row) * cls.X_STEP
+                y = cls.BASE_Y + (len(rows) - 1) * cls.Y_STEP
+            else:
+                x, y = cls.BASE_X, cls.BASE_Y
 
-        x = self.base_x + col * self.x_step
-        y = self.base_y + row * self.y_step
+            return (float(x), float(y))
 
-        return (float(x), float(y))
+        # 2. Якщо вставка всередині (пошук конкретного ряду та колонки)
+        current_idx = 0
+        for row_idx, row_slots in enumerate(rows):
+            if current_idx <= index < current_idx + len(row_slots):
+                col_idx = index - current_idx
+                x = cls.BASE_X + col_idx * cls.X_STEP
+                y = cls.BASE_Y + row_idx * cls.Y_STEP
+                return (float(x), float(y))
+            current_idx += len(row_slots)
+
+        return (float(cls.BASE_X), float(cls.BASE_Y))
 
 
 # =============================================================================
