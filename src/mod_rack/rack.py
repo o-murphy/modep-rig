@@ -13,6 +13,9 @@ from mod_rack.client import (
     Client,
     GraphConnectEvent,
     GraphDisconnectEvent,
+    GraphRemoveHwPortEvent,
+    PortDirection,
+    PortType,
     RemoveAllEvent,
     LoadingEndEvent,
     LoadingStartEvent,
@@ -75,20 +78,20 @@ class PluginSlot:
         return self.plugin.label
 
     @property
-    def inputs(self) -> list[str]:
-        return [p.graph_path for p in self.plugin.inputs]
+    def audio_inputs(self) -> list[str]:
+        return [p.graph_path for p in self.plugin.audio_inputs]
 
     @property
-    def outputs(self) -> list[str]:
-        return [p.graph_path for p in self.plugin.outputs]
+    def audio_outputs(self) -> list[str]:
+        return [p.graph_path for p in self.plugin.audio_outputs]
 
     @property
-    def join_outputs(self) -> bool:
-        return self.plugin.join_outputs
+    def join_audio_outputs(self) -> bool:
+        return self.plugin.join_audio_outputs
 
     @property
-    def join_inputs(self) -> bool:
-        return self.plugin.join_inputs
+    def join_audio_inputs(self) -> bool:
+        return self.plugin.join_audio_inputs
 
     @staticmethod
     def _label_from_uri(uri: str) -> str:
@@ -118,36 +121,49 @@ class PluginSlot:
 class HardwareSlot:
     """Hardware I/O слот (capture/playback)."""
 
-    def __init__(self, ports: list[str], is_input: bool, config: HardwareConfig):
-        self.ports = ports
-        self._is_input = is_input
-        self._join_ports = config.join_inputs if is_input else config.join_outputs
+    def __init__(
+        self, audio_ports: list[str], direction: PortDirection, config: HardwareConfig
+    ):
+        # Використовуємо звичайні атрибути, щоб вони були доступні відразу
+        self.audio_ports = audio_ports  # список імен портів
+        self.direction = direction
+
+        # Налаштування з конфігу
+        if direction == PortDirection.INPUT:
+            self.join_audio_ports = config.join_audio_inputs
+            self.label = "hw_in"
+        else:
+            self.join_audio_ports = config.join_audio_outputs
+            self.label = "hw_out"
 
     @property
-    def label(self) -> str:
-        return "hw_in" if self._is_input else "hw_out"
+    def audio_inputs(self) -> list[str]:
+        """
+        Для Hardware INPUT (capture) - це джерело сигналу.
+        Але в термінах графа MOD вони поводяться як ВИХОДИ (outputs).
+        Тому для сумісності з RoutingManager:
+        """
+        # Якщо це вхідний залізячний слот, він НЕ МАЄ входів у графі (він - початок)
+        return [] if self.direction == PortDirection.INPUT else self.audio_ports
 
     @property
-    def outputs(self) -> list[str]:
-        """Виходи hardware input slot (capture порти)."""
-        return self.ports if self._is_input else []
+    def audio_outputs(self) -> list[str]:
+        """Це те, що йде В ГРАФ."""
+        # Якщо це вхідний залізячний слот, його порти є ВИХОДАМИ для графа
+        return self.audio_ports if self.direction == PortDirection.INPUT else []
 
     @property
-    def join_outputs(self) -> bool:
-        return self._join_ports if self._is_input else False
+    def join_audio_inputs(self) -> bool:
+        return (
+            self.join_audio_ports if self.direction == PortDirection.OUTPUT else False
+        )
 
     @property
-    def inputs(self) -> list[str]:
-        """Входи hardware output slot (playback порти)."""
-        return self.ports if not self._is_input else []
-
-    @property
-    def join_inputs(self) -> bool:
-        return self._join_ports if not self._is_input else False
+    def join_audio_outputs(self) -> bool:
+        return self.join_audio_ports if self.direction == PortDirection.INPUT else False
 
     def __repr__(self):
-        kind = "Input" if self._is_input else "Output"
-        return f"HardwareSlot({kind}, ports={self.ports})"
+        return f"HardwareSlot({self.direction.name}, ports={self.audio_ports})"
 
 
 AnySlot = HardwareSlot | PluginSlot
@@ -366,21 +382,23 @@ class RoutingManager:
     """
 
     @classmethod
-    def get_connection_pairs(cls, src: AnySlot, dst: AnySlot) -> list[tuple[str, str]]:
+    def get_audio_connection_pairs(cls, src: AnySlot, dst: AnySlot) -> list[tuple[str, str]]:
         """Розраховує пари (вихід, вхід) між двома слотами."""
-        outputs = src.outputs
-        inputs = dst.inputs
+        outputs = src.audio_outputs
+        inputs = dst.audio_inputs
+
+        print(src, outputs, dst, inputs)
 
         if not outputs or not inputs:
             return []
 
         # Визначаємо прапори об'єднання (join)
-        join_outputs = src.join_outputs
-        join_inputs = dst.join_inputs
+        join_audio_outputs = src.join_audio_outputs
+        join_audio_inputs = dst.join_audio_inputs
 
         connections = []
 
-        if join_outputs or join_inputs:
+        if join_audio_outputs or join_audio_inputs:
             # All-to-all: кожен вихід з кожним входом
             for out in outputs:
                 for inp in inputs:
@@ -399,7 +417,7 @@ class RoutingManager:
         return connections
 
     @classmethod
-    def calculate_chain_connections(
+    def calculate_audio_chain_connections(
         cls,
         slots: list[PluginSlot],
         input_slot: HardwareSlot,
@@ -410,7 +428,7 @@ class RoutingManager:
         chain = [input_slot] + slots + [output_slot]
 
         for i in range(len(chain) - 1):
-            pairs = cls.get_connection_pairs(chain[i], chain[i + 1])
+            pairs = cls.get_audio_connection_pairs(chain[i], chain[i + 1])
             desired.update(pairs)
 
         return desired
@@ -445,9 +463,11 @@ class Orchestrator:
         self._order_change_listeners: set[OnRackOrderChangeCallbackRef] = set()
 
         # Slots and connections cache
-        self.input_slot = HardwareSlot(ports=[], is_input=True, config=config.hardware)
+        self.input_slot = HardwareSlot(
+            audio_ports=[], direction=PortDirection.INPUT, config=config.hardware
+        )
         self.output_slot = HardwareSlot(
-            ports=[], is_input=False, config=config.hardware
+            audio_ports=[], direction=PortDirection.OUTPUT, config=config.hardware
         )
         self.slots: list[PluginSlot] = []
         self._connections: set[tuple[str, str]] = set()
@@ -482,6 +502,7 @@ class Orchestrator:
         self.client.ws.on(LoadingStartEvent, self._on_loading_start)
         self.client.ws.on(LoadingEndEvent, self._on_loading_end)
         self.client.ws.on(GraphAddHwPortEvent, self._on_graph_hw_port_add)
+        self.client.ws.on(GraphRemoveHwPortEvent, self._on_graph_hw_port_remove)
         self.client.ws.on(GraphPluginAddEvent, self._on_graph_plugin_add)
         self.client.ws.on(GraphPluginRemoveEvent, self._on_graph_plugin_remove)
         self.client.ws.on(RemoveAllEvent, self._on_remove_all)
@@ -522,18 +543,33 @@ class Orchestrator:
         Handle hardware port added via WebSocket feedback.
         Updates hardware slots.
         """
-        type_ = "Out" if event.is_output else "In"
-        _Color.blue(f"+ HW {type_:<3}: {event.name}")
-        hw_config = self.config.hardware
+        _Color.debug(
+            f"~ HW {event.port_type.name} {event.direction.name}: {event.name}"
+        )
 
-        if event.is_output:
-            slot = self.output_slot
-        else:
-            slot = self.input_slot
+        if event.port_type == PortType.AUDIO:
+            hw_config = self.config.hardware
 
-        if event.name not in hw_config.disable_ports:
-            if event.name not in slot.ports:
-                slot.ports.append(event.name)
+            if event.direction == PortDirection.OUTPUT:
+                slot = self.output_slot
+            else:
+                slot = self.input_slot
+
+            if event.name not in hw_config.disable_ports:
+                if event.name not in slot.audio_ports:
+                    slot.audio_ports.append(event.name)
+                    _Color.blue(
+                        f"+ HW {event.port_type.name} {event.direction.name}: {event.name}"
+                    )
+
+        elif event.port_type == PortType.MIDI:
+            _Color.red("Warning: HW MIDI PORTS IS NOT YET SUPPORTED")
+
+        self._schedule_reorder()
+
+    def _on_graph_hw_port_remove(self, event: GraphRemoveHwPortEvent):
+        # TODO: handle this event
+        self._schedule_reorder()
 
     def _on_graph_plugin_add(self, event: GraphPluginAddEvent):
         """
@@ -716,9 +752,10 @@ class Orchestrator:
 
         with self._lock:
             # 1. Отримуємо "ідеальний" стан від менеджера
-            desired = RoutingManager.calculate_chain_connections(
+            desired = RoutingManager.calculate_audio_chain_connections(
                 self.slots, self.input_slot, self.output_slot
             )
+            print(desired)
 
             # 2. Обчислюємо різницю з кешем Orchestrator
             to_connect = desired - self._connections
@@ -738,7 +775,7 @@ class Orchestrator:
 
     def _connect_pair(self, src: AnySlot, dst: AnySlot):
         """Проксі-метод для точкового з'єднання (наприклад, при видаленні плагіна)."""
-        pairs = RoutingManager.get_connection_pairs(src, dst)
+        pairs = RoutingManager.get_audio_connection_pairs(src, dst)
         for out_path, in_path in pairs:
             # Важливо: ми не додаємо в self._connections самі, чекаємо WS події
             self.client.effect_connect(out_path, in_path)

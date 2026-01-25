@@ -15,11 +15,11 @@ from mod_rack.config import Config, PluginConfig
 from mod_rack.controls import ControlPort, parse_control_ports
 
 
-__all__ = ["Port", "Plugin"]
+__all__ = ["AudioPort", "Plugin"]
 
 
 @dataclass(frozen=True, slots=True)
-class Port:
+class AudioPort:
     """Audio/CV port on a plugin."""
 
     symbol: str
@@ -52,15 +52,19 @@ class Plugin:
         self._controls: dict[str, ControlPort] = {}
 
         # inputs setup
-        self.inputs: list[Port] = []
-        self.outputs: list[Port] = []
+        self.audio_inputs: list[AudioPort] = []
+        self.audio_outputs: list[AudioPort] = []
         # configuration
-        self.join_inputs: bool = config.join_inputs if config is not None else False
-        self.join_outputs: bool = config.join_outputs if config is not None else False
+        self.join_audio_inputs: bool = (
+            config.join_audio_inputs if config is not None else False
+        )
+        self.join_audio_outputs: bool = (
+            config.join_audio_outputs if config is not None else False
+        )
 
         self._effect_data = self.client.effect_get(self.uri)
         self.name = self._effect_data.get("name", self.label)
-        self._load_plugin_ports()
+        self._load_plugin_audio_ports()
         self._load_controls()
         self._subscribe()
 
@@ -94,7 +98,7 @@ class Plugin:
         )
         return plugin
 
-    def _load_plugin_ports(self) -> None:
+    def _load_plugin_audio_ports(self) -> None:
         """Load and filter plugin ports from effect data.
 
         Args:
@@ -115,8 +119,8 @@ class Plugin:
         for p in audio_ports.get("input", []):
             if config is not None and p["symbol"] in config.disable_ports:
                 continue
-            self.inputs.append(
-                Port(
+            self.audio_inputs.append(
+                AudioPort(
                     symbol=p["symbol"],
                     name=p.get("name", p["symbol"]),
                     graph_path=f"{label}/{p['symbol']}",
@@ -125,15 +129,17 @@ class Plugin:
         for p in audio_ports.get("output", []):
             if config is not None and p["symbol"] in config.disable_ports:
                 continue
-            self.outputs.append(
-                Port(
+            self.audio_outputs.append(
+                AudioPort(
                     symbol=p["symbol"],
                     name=p.get("name", p["symbol"]),
                     graph_path=f"{label}/{p['symbol']}",
                 )
             )
 
-        print(f"  Parsed ports: inputs={self.inputs}, outputs={self.outputs}")
+        print(
+            f"  Parsed ports: inputs={self.audio_inputs}, outputs={self.audio_outputs}"
+        )
 
     def _load_controls(self) -> None:
         """Load control metadata from effect_get response."""

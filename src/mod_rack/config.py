@@ -26,8 +26,8 @@ class PluginConfig:
     # Явний режим каналів: "mono", "stereo", або None (авто)
     mode: str | None = None
     # All-to-all routing: з'єднати всі входи/виходи між собою
-    join_inputs: bool = False
-    join_outputs: bool = False
+    join_audio_inputs: bool = False
+    join_audio_outputs: bool = False
 
 
 @dataclass
@@ -35,8 +35,8 @@ class HardwareConfig:
     # None = auto-detect from MOD-UI, list = override with specific ports
     disable_ports: list[str] = field(default_factory=list)
     # All-to-all routing for hardware ports
-    join_inputs: bool = False  # Join all hardware inputs to first plugin
-    join_outputs: bool = False  # Join last plugin outputs to all hardware outputs
+    join_audio_inputs: bool = False  # Join all hardware inputs to first plugin
+    join_audio_outputs: bool = False  # Join last plugin outputs to all hardware outputs
 
 
 @dataclass
@@ -73,8 +73,8 @@ class Config:
         hw_data = data.get("hardware", {})
         hardware = HardwareConfig(
             disable_ports=hw_data.get("disable_ports", []),  # None = auto-detect
-            join_inputs=hw_data.get("join_inputs", False),
-            join_outputs=hw_data.get("join_outputs", False),
+            join_audio_inputs=hw_data.get("join_audio_inputs", False),
+            join_audio_outputs=hw_data.get("join_audio_outputs", False),
         )
         rack_data = data.get("rack", {})
         rack = RackConfig(
@@ -91,8 +91,8 @@ class Config:
                     category=p.get("category", ""),
                     disable_ports=p.get("disable_ports", []),
                     mode=p.get("mode"),
-                    join_inputs=p.get("join_inputs", False),
-                    join_outputs=p.get("join_outputs", False),
+                    join_audio_inputs=p.get("join_audio_inputs", False),
+                    join_audio_outputs=p.get("join_audio_outputs", False),
                 )
             )
 

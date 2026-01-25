@@ -3,6 +3,8 @@ from .client import (
     Client,
     WsClient,
     WsConnection,
+    PortDirection,
+    PortType,
     WsEvent,
     WsProtocol,
     GraphAddHwPortEvent,
@@ -31,7 +33,7 @@ from .rack import (
     Rack,
     RoutingManager,
 )
-from .plugin import Plugin, Port
+from .plugin import Plugin, AudioPort
 from .controls import (
     ControlPort,
     ControlProperties,
@@ -52,8 +54,14 @@ __all__ = [
     "WsConnection",
     "WsProtocol",
     "WsClient",
+    # Client:Port
+    "PortType",
+    "PortDirection",
+    # Client:Generic
     "WsEvent",
-    # Events
+    "EventCallBack",
+    "EventCallBackRef",
+    # Client:WsEvent
     "PingEvent",
     "StatsEvent",
     "SysStatsEvent",
@@ -66,6 +74,7 @@ __all__ = [
     "SizeEvent",
     "PbSizeEvent",
     "GraphAddHwPortEvent",
+    "GraphRemoveHwPortEvent",
     "GraphConnectEvent",
     "GraphDisconnectEvent",
     "GraphParamSetEvent",
@@ -85,7 +94,7 @@ __all__ = [
     "OrchestratorMode",
     # Plugin
     "Plugin",
-    "Port",
+    "AudioPort",
     # Controls
     "ControlProperties",
     "ScalePoint",

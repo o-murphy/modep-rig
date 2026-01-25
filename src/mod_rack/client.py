@@ -1,5 +1,6 @@
 from collections import defaultdict
 from dataclasses import dataclass, field
+from enum import Enum
 import time
 import threading
 import weakref
@@ -10,12 +11,19 @@ import requests
 import websocket
 
 __all__ = [
+    # Client
     "Client",
     "WsConnection",
     "WsProtocol",
     "WsClient",
+    # Client:Port
+    "PortType",
+    "PortDirection",
+    # Client:Generic
     "WsEvent",
-    # Events
+    "EventCallBack",
+    "EventCallBackRef",
+    # Client:WsEvent
     "PingEvent",
     "StatsEvent",
     "SysStatsEvent",
@@ -28,6 +36,7 @@ __all__ = [
     "SizeEvent",
     "PbSizeEvent",
     "GraphAddHwPortEvent",
+    "GraphRemoveHwPortEvent",
     "GraphConnectEvent",
     "GraphDisconnectEvent",
     "GraphParamSetEvent",
@@ -113,10 +122,26 @@ class PbSizeEvent:
     y: int
 
 
+class PortType(Enum):
+    AUDIO = "audio"
+    MIDI = "midi"
+
+
+class PortDirection(Enum):
+    INPUT = "0"
+    OUTPUT = "1"
+
+
 @dataclass(frozen=True)
 class GraphAddHwPortEvent:
     name: str
-    is_output: bool
+    port_type: PortType
+    direction: PortDirection
+
+
+@dataclass(frozen=True)
+class GraphRemoveHwPortEvent:
+    name: str
 
 
 @dataclass(frozen=True)
@@ -189,6 +214,7 @@ WsEvent = (
     | SizeEvent
     | PbSizeEvent
     | GraphAddHwPortEvent
+    | GraphRemoveHwPortEvent
     | GraphConnectEvent
     | GraphDisconnectEvent
     | GraphParamSetEvent
@@ -247,11 +273,19 @@ class WsProtocol:
                 return LoadingEndEvent()
 
             # audio port
-            case ["add_hw_port", path, "audio", is_out, *_]:
-                return GraphAddHwPortEvent(
-                    name=path.removeprefix(prefix),
-                    is_output=is_out == "1",
-                )
+            case ["add_hw_port", instance, "audio" | "midi" as typ, dir_, *_]:
+                try:
+                    return GraphAddHwPortEvent(
+                        name=instance.removeprefix(prefix),
+                        port_type=PortType(typ),
+                        direction=PortDirection(dir_),
+                    )
+                except ValueError as e:
+                    print(e)
+                    return None
+
+            case ["remove_hw_port", instance, *_]:
+                return GraphRemoveHwPortEvent(name=instance.removeprefix(prefix))
 
             # plugin_pos /graph/label x y
             case ["plugin_pos", inst, rx, ry, *_]:

@@ -8,9 +8,9 @@ url = "http://127.0.0.1:18181/"
 [hardware]
 # disable_ports = ["capture_1"] #, "capture_2"]
 # All-to-all routing: connect all hardware inputs to all first plugin inputs
-# join_inputs = true
+# join_audio_inputs = true
 # All-to-all routing: connect all last plugin outputs to all hardware outputs
-# join_outputs = true
+# join_audio_outputs = true
 
 [rack]
 slot_count = 4

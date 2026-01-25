@@ -95,18 +95,18 @@ When there are more inputs than outputs, the last output is duplicated to remain
 
 ### Join Mode (All-to-All Routing)
 
-For plugins that need all outputs connected to all inputs (e.g., mixers, splitters), use `join_inputs` or `join_outputs`:
+For plugins that need all outputs connected to all inputs (e.g., mixers, splitters), use `join_audio_inputs` or `join_audio_outputs`:
 
 ```toml
 [[plugins]]
 name = "Triple chorus"
 uri = "http://drobilla.net/plugins/fomp/triple_chorus"
 category = "modulator"
-join_outputs = true  # All outputs connect to all inputs of next plugin
+join_audio_outputs = true  # All outputs connect to all inputs of next plugin
 ```
 
-- `join_outputs = true` on source plugin: all its outputs connect to all inputs of the next plugin
-- `join_inputs = true` on destination plugin: all outputs from previous plugin connect to all its inputs
+- `join_audio_outputs = true` on source plugin: all its outputs connect to all inputs of the next plugin
+- `join_audio_inputs = true` on destination plugin: all outputs from previous plugin connect to all its inputs
 
 ### Hardware Port Auto-Detection
 
@@ -127,8 +127,8 @@ Similar join routing is available for hardware inputs/outputs:
 
 ```toml
 [hardware]
-join_inputs = true   # All hardware inputs connect to all inputs of first plugin
-join_outputs = true  # All outputs of last plugin connect to all hardware outputs
+join_audio_inputs = true   # All hardware inputs connect to all inputs of first plugin
+join_audio_outputs = true  # All outputs of last plugin connect to all hardware outputs
 ```
 
 This is useful for:
