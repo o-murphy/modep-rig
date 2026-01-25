@@ -1,3 +1,4 @@
+from enum import Enum, auto
 import threading
 import time
 from typing import Any, Callable, SupportsIndex
@@ -27,7 +28,7 @@ OnSlotRemovedCallback = Callable[[str], None]  # label
 OnOrderChangeCallback = Callable[[list[str]], None]  # order (list of labels)
 
 
-__all__ = ["PluginSlot", "HardwareSlot", "Rack", "EventMonitor"]
+__all__ = ["PluginSlot", "HardwareSlot", "Rack", "Orchestrator", "OrchestratorMode"]
 
 
 # =============================================================================
@@ -237,6 +238,12 @@ class GridLayoutManager:
 
         return (float(cls.BASE_X), float(cls.BASE_Y))
 
+    @classmethod
+    def get_new_row_coords(cls, slots: list[PluginSlot]) -> tuple[float, float]:
+        """Повертає координати для початку нового ряду (нижче всіх існуючих)."""
+        rows = cls.get_clustered_rows(slots)
+        return (float(cls.BASE_X), float(cls.BASE_Y + len(rows) * cls.Y_STEP))
+
 
 # =============================================================================
 # Rack
@@ -265,8 +272,14 @@ class _Color:
         print(f"\033[90m{msg}\033[0m")
 
 
-class EventMonitor:
-    def __init__(self, config: Config, *args, **kwargs):
+class OrchestratorMode(Enum):
+    OBSERVER = auto()  # Тільки дивиться
+    MANAGER = auto()  # Вирівнює автоматично
+
+
+class Orchestrator:
+    def __init__(self, config: Config, mode: OrchestratorMode = OrchestratorMode.OBSERVER, *args, **kwargs):
+        self.mode = mode
         self.config = config
         self.client = Client(config.server.url)
 
@@ -283,8 +296,6 @@ class EventMonitor:
         self.output_slot = HardwareSlot(ports=[], is_input=False)
         self.slots: list[PluginSlot] = []
         self._connections: set[tuple[str, str]] = set()
-
-        self._layout_manager = GridLayoutManager()
 
         self._subscribe()
 
@@ -442,22 +453,24 @@ class EventMonitor:
 
         with self._lock:
             # NOTE: we should ensure that plugin already got an update
-            old_pos = (slot.pos_x, slot.pos_y)
             x, y = (event.x, event.y)
             if slot.is_pos_changed((x, y)):
-                _Color.yellow(f"\u21bb Normalizing: {old_pos} -> {(x, y)}")
+                _Color.yellow(f"\u21bb Syncing pos: {slot.label} to {(x, y)}")
                 slot.pos_x = x
                 slot.pos_y = y
 
         if not self._loading and not self.normalizing:
             self._reorder_slots_by_pos()
 
-    def _normalize(self):
-        _Color.info("\u21bb Normalization...")
+    def _normalize(self, /, force: bool = False):
         if self._loading:
             return
+        
+        if self.mode == OrchestratorMode.OBSERVER and not force:
+            return
 
-        new_positions = self._layout_manager.normalize(self.slots)
+        _Color.info("\u21bb Normalization...")
+        new_positions = GridLayoutManager.normalize(self.slots)
 
         self.normalizing = True
 
@@ -483,7 +496,7 @@ class EventMonitor:
         with self._lock:
             # sort slots by pos
             old_order = [s.label for s in self.slots]
-            self.slots = self._layout_manager.sort_slots(self.slots)
+            self.slots = GridLayoutManager.sort_slots(self.slots)
             new_order = [s.label for s in self.slots]
 
         # then normalize
@@ -553,8 +566,6 @@ class Rack:
         self._ext_on_slot_removed: OnSlotRemovedCallback | None = None
         self._ext_on_order_change: OnOrderChangeCallback | None = None
 
-        self.layout_manager = GridLayoutManager()
-
         self._subscribe()
         self.client.ws.connect()
 
@@ -578,7 +589,7 @@ class Rack:
         self._loading = False
 
         # Використовуємо LayoutManager
-        new_positions = self.layout_manager.normalize(self.slots)
+        new_positions = GridLayoutManager.normalize(self.slots)
         for slot, (x, y) in new_positions.items():
             slot.pos_x = x
             slot.pos_y = y
@@ -663,7 +674,7 @@ class Rack:
 
     def _reorder_by_layout(self):
         old_order = [s.label for s in self.slots]
-        self.slots = self.layout_manager.sort_slots(self.slots)
+        self.slots = GridLayoutManager.sort_slots(self.slots)
         new_order = [s.label for s in self.slots]
 
         if old_order != new_order:
@@ -678,7 +689,7 @@ class Rack:
             return
 
         with self._lock:
-            updates = self.layout_manager.normalize(self.slots)
+            updates = GridLayoutManager.normalize(self.slots)
             for slot, (x, y) in updates.items():
                 if abs(slot.pos_x - x) > 10 or abs(slot.pos_y - y) > 10:
                     slot.pos_x = x
@@ -722,7 +733,7 @@ class Rack:
             )
 
             # Сортуємо
-            self.slots = self.layout_manager.sort_slots(self.slots)
+            self.slots = GridLayoutManager.sort_slots(self.slots)
 
             # Сповіщуємо UI
             if self._ext_on_slot_added:
@@ -730,7 +741,7 @@ class Rack:
 
             # Нормалізуємо тільки після завантаження
             if not self._loading:
-                new_positions = self.layout_manager.normalize(self.slots)
+                new_positions = GridLayoutManager.normalize(self.slots)
                 for slot, (x, y) in new_positions.items():
                     slot.pos_x = x
                     slot.pos_y = y
@@ -755,7 +766,7 @@ class Rack:
 
         # Normalize remaining positions to fill the gap
         if not self._loading:
-            new_positions = self.layout_manager.normalize(self.slots)
+            new_positions = GridLayoutManager.normalize(self.slots)
             for slot, (x, y) in new_positions.items():
                 slot.pos_x = x
                 slot.pos_y = y
@@ -821,7 +832,7 @@ class Rack:
             label if REST OK, None if error
         """
         # Calculate position for this index
-        x, y = self._calculate_position_for_index(insert_index)
+        x, y = GridLayoutManager.get_insertion_coords(self.slots, insert_index)
 
         return self.request_add_plugin(uri, x=int(x), y=int(y))
 
@@ -899,7 +910,7 @@ class Rack:
         self.reconnect_seamless()
 
         # Normalize positions (updates server)
-        new_positions = self.layout_manager.normalize(self.slots)
+        new_positions = GridLayoutManager.normalize(self.slots)
         for slot, (x, y) in new_positions.items():
             slot.pos_x = x
             slot.pos_y = y
@@ -908,58 +919,6 @@ class Rack:
         # Notify UI
         if self._ext_on_order_change:
             self._ext_on_order_change([s.label for s in self.slots])
-
-    def _calculate_position_for_index(
-        self,
-        target_idx: int,
-        exclude_slot: PluginSlot | None = None,
-    ) -> tuple[float, float]:
-        """
-        Calculate X,Y position for inserting a slot at target index.
-
-        Args:
-            target_idx: Target position in the chain
-            exclude_slot: Slot to exclude from calculations (the one being moved)
-
-        Returns:
-            (x, y) coordinates
-        """
-        layout = self.layout  # GridLayoutManager
-
-        # Список інших слотів без exclude_slot
-        other_slots = [s for s in self.slots if s != exclude_slot]
-
-        # Якщо нема інших слотів, вставляємо в базову позицію
-        if not other_slots:
-            return (layout.base_x, layout.base_y)
-
-        # Сортуємо слоти по Y-кластерах та X
-        sorted_slots = layout.sort_slots(other_slots)
-
-        # Вставка перед першим
-        if target_idx <= 0:
-            first = sorted_slots[0]
-            return (first.pos_x - layout.x_step, first.pos_y)
-
-        # Вставка після останнього
-        if target_idx >= len(sorted_slots):
-            last = sorted_slots[-1]
-            return (last.pos_x + layout.x_step, last.pos_y)
-
-        # Вставка між двома слотами
-        prev_slot = sorted_slots[target_idx - 1]
-        next_slot = sorted_slots[target_idx]
-
-        # Ряд обчислюємо по Y базовим кроком
-        row = (target_idx - 1) // layout.max_per_row
-        new_y = layout.base_y + row * layout.y_step
-
-        # X розташовуємо посередині або мінімум x_step від prev
-        new_x = max(
-            prev_slot.pos_x + layout.x_step, (prev_slot.pos_x + next_slot.pos_x) / 2
-        )
-
-        return (new_x, new_y)
 
     # =========================================================================
     # Routing

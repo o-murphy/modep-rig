@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 
 from mod_rack.config import Config
-from mod_rack.rack import EventMonitor
+from mod_rack.rack import Orchestrator, OrchestratorMode
 
 
 def main():
@@ -38,7 +38,7 @@ def main():
     # Create rack (do not force reset on init — build state from WebSocket)
     print("Connecting to MOD server...")
     try:
-        EventMonitor(config, prevent_normalization=not args.master).run()    
+        Orchestrator(config, OrchestratorMode.MANAGER).run()    
     except KeyboardInterrupt:
         print("Stopping monitor...")
 
