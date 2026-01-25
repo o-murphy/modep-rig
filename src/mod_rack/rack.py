@@ -153,9 +153,9 @@ class GridLayoutManager:
     """
 
     X_STEP: float = 600.0
-    Y_STEP: float = 600.0
+    Y_STEP: float = 1000.0
     BASE_X: float = 200.0
-    BASE_Y: float = 400.0
+    BASE_Y: float = 200.0
     Y_THRESHOLD: float = 150.0
 
     @classmethod
@@ -188,6 +188,41 @@ class GridLayoutManager:
                 # Кожен плагін у ряду отримує свій X
                 x = cls.BASE_X + col_idx * cls.X_STEP
                 result[slot] = (x, y)
+
+        return result
+
+    @classmethod
+    def move_slot(
+        cls, slots: list[PluginSlot], from_idx: int, to_idx: int
+    ) -> dict[PluginSlot, tuple[float, float]]:
+        """
+        Переміщує слот у списку та перепризначає існуючі координати слотам
+        відповідно до їхнього нового порядку.
+        """
+        if not slots:
+            return {}
+
+        # 1. Отримуємо стабільно відсортований поточний список
+        ordered_slots = cls.sort_slots(list(slots))
+        
+        # 2. Зберігаємо всі поточні координати у тому порядку, в якому вони є зараз
+        # Це наш "шаблон" позицій на екрані
+        coords_template = [(s.pos_x, s.pos_y) for s in ordered_slots]
+
+        if from_idx < 0 or from_idx >= len(ordered_slots):
+            return {s: (s.pos_x, s.pos_y) for s in slots}
+
+        # 3. Виконуємо перестановку об'єктів у списку
+        to_idx = max(0, min(to_idx, len(ordered_slots) - 1))
+        slot_to_move = ordered_slots.pop(from_idx)
+        ordered_slots.insert(to_idx, slot_to_move)
+
+        # 4. Створюємо ret_val: беремо переставлені слоти 
+        # і даємо їм координати з шаблону по порядку
+        result = {}
+        for idx, slot in enumerate(ordered_slots):
+            new_x, new_y = coords_template[idx]
+            result[slot] = (float(new_x), float(new_y))
 
         return result
 
@@ -500,7 +535,7 @@ class Orchestrator:
         if not self._loading and not self.normalizing:
             self._reorder_slots_by_pos()
 
-    def _normalize(self, /, force: bool = False):
+    def request_normalize(self, /, force: bool = False):
         if self._loading:
             return
 
@@ -538,7 +573,7 @@ class Orchestrator:
             new_order = [s.label for s in self.slots]
 
         # then normalize
-        self._normalize()
+        self.request_normalize()
 
         with self._lock:
             # check order changed
@@ -619,6 +654,10 @@ class Rack(Orchestrator):
         with self._lock:
             if not self._loading:
                 self.reconnect_seamless()
+
+    def _order_changed_emit(self):
+        super()._order_changed_emit()
+        self.reconnect_seamless()
 
     # =========================================================================
     # Request API (ініціювання без локальних змін)
@@ -746,23 +785,32 @@ class Rack(Orchestrator):
 
         print(f"Moving slot from idx {from_idx} to {to_idx}")
 
-        # slot = self.slots[from_idx]
-        # x, y = GridLayoutManager.get_insertion_coords(self.slots, to_idx)
-        # self.client.effect_position(slot.label, x, y)
+        if self._loading:
+            return
 
-        # Reorder locally
-        slot = self.slots.pop(from_idx)
-        self.slots.insert(to_idx, slot)
+        _Color.info("\u21c5 Reordering...")
+        new_positions = GridLayoutManager.move_slot(self.slots, from_idx, to_idx)
 
-        # Reconnect with new order
-        self.reconnect_seamless()
+        self.normalizing = True
 
-        # Normalize positions (updates server)
-        new_positions = GridLayoutManager.normalize(self.slots)
-        for slot, (x, y) in new_positions.items():
-            slot.pos_x = x
-            slot.pos_y = y
-            self.client.effect_position(slot.label, x, y)
+        try:
+            for slot, (x, y) in new_positions.items():
+                old_pos = (slot.pos_x, slot.pos_y)
+                _Color.yellow(f"\u21c5 Reordering: {old_pos} -> {(x, y)}")
+                if slot.is_pos_changed((x, y)):
+                    slot.pos_x = x
+                    slot.pos_y = y
+                    # Need small delay before server be able to react
+                    time.sleep(0.1)
+                    self.client.effect_position(slot.label, x, y)
+        except Exception as err:
+            _Color.red(f"\u21bb Normalizing: error occured: {err}")
+        finally:
+            # Debounce delay
+            time.sleep(0.4)
+            with self._lock:
+                self.normalizing = False
+            self._reorder_slots_by_pos(force_emit=True)
 
     # =========================================================================
     # Routing
