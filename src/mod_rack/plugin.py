@@ -64,6 +64,10 @@ class Plugin:
 
         self._effect_data = self.client.effect_get(self.uri)
         self.name = self._effect_data.get("name", self.label)
+
+        self.size: tuple[int, int] = self.client.effect_image_size(
+            self.uri, "screenshot.png"
+        )
         self._load_plugin_audio_ports()
         self._load_controls()
         self._subscribe()

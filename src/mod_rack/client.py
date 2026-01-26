@@ -1,6 +1,7 @@
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
+import struct
 import time
 import threading
 import weakref
@@ -709,6 +710,14 @@ class Client:
             print(f"    ERROR: HTTP {resp.status_code}")
             return None
 
+        content_type = resp.headers.get("Content-Type", "")
+
+        # 1. Обробка зображень (PNG, JPEG тощо)
+        if "image/" in content_type:
+            data = resp.content
+            return data
+
+        # 2. Обробка тексту та JSON
         text = resp.text.strip()
 
         if text.lower() == "true":
@@ -722,8 +731,10 @@ class Client:
             data = resp.json()
             print(f"    OK: {type(data).__name__}")
             return data
-        except requests.exceptions.JSONDecodeError:
-            print(f"    OK: {text[:50]}..." if len(text) > 50 else f"    OK: {text}")
+        except (requests.exceptions.JSONDecodeError, ValueError):
+            # Якщо це не JSON, повертаємо текст або None
+            display_text = text[:50].replace("\n", " ")
+            print(f"    OK: {display_text}..." if len(text) > 50 else f"    OK: {text}")
             return text if text else None
 
     # =========================================================================
@@ -746,6 +757,41 @@ class Client:
     def effect_get(self, uri: str):
         """Отримати детальну інформацію про ефект"""
         return self._get("/effect/get", uri=uri, version=self.version)
+
+    def effect_image(self, uri: str, filename: str = "screenshot.png"):
+        """Отримати скріншот ефекту"""
+        return self._get(f"/effect/image/{filename}", uri=uri)
+
+    def effect_image_size(
+        self, uri: str, filename: str = "screenshot.png"
+    ) -> tuple[int, int]:
+        w, h = 0, 0
+        try:
+            resp = requests.get(
+                self.base_url + f"/effect/image/{filename}",
+                params={"uri": uri},
+                headers=HEADERS,
+            )
+
+            content_type = resp.headers.get("Content-Type", "")
+
+            # 1. Обробка зображень (PNG, JPEG тощо)
+            if "image/" in content_type:
+                data = resp.content
+
+                # info = f"image ({len(data)} bytes)"
+
+                # Спроба отримати розміри PNG без Pillow
+                if "image/png" in content_type and len(data) >= 24:
+                    try:
+                        w, h = struct.unpack(">II", data[16:24])
+                        # info += f" {w}x{h}px"
+                    except struct.error:
+                        pass
+
+                # print(f"    OK: {info}")
+        finally:
+            return w, h
 
     def effect_add(
         self, label: str, uri: str, x: int = 200, y: int = 400

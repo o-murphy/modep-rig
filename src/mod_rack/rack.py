@@ -93,6 +93,10 @@ class PluginSlot:
     def join_audio_inputs(self) -> bool:
         return self.plugin.join_audio_inputs
 
+    @property
+    def size(self) -> tuple[int, int]:
+        return self.plugin.size
+
     @staticmethod
     def _label_from_uri(uri: str) -> str:
         """Генерує базовий label з URI плагіна."""
@@ -208,11 +212,13 @@ class GridLayoutManager:
         Y_THRESHOLD: Maximum Y difference to consider slots in the same row for sorting.
     """
 
-    X_STEP: float = 900.0
-    Y_STEP: float = 600.0
-    BASE_X: float = 200.0
-    BASE_Y: float = 200.0
-    Y_THRESHOLD: float = 150.0
+    X_STEP: float = 500.0
+    Y_STEP: float = 200.0
+    X_MIN_SPACING: float = 100.0
+    Y_MIN_SPACING: float = 50.0
+    BASE_X: float = 150.0
+    BASE_Y: float = 100.0
+    Y_THRESHOLD: float = 200.0
 
     @classmethod
     def sort_slots(cls, slots: list[PluginSlot]) -> list[PluginSlot]:
@@ -233,17 +239,32 @@ class GridLayoutManager:
         # Для цього нам треба трохи змінити або використати внутрішню логіку sort_slots
         rows = cls.get_clustered_rows(slots)
 
+        # Починаємо з 0
+        prev_y: float = 0.0
+        prev_h: float = 0.0
+
         for row_idx, row_slots in enumerate(rows):
             # Кожен кластер отримує свій фіксований Y
-            y = cls.BASE_Y + row_idx * cls.Y_STEP
+            y_offset = prev_y + prev_h
+            y = cls.BASE_Y + max(row_idx * cls.Y_STEP, y_offset) + cls.Y_MIN_SPACING
 
             # Сортуємо плагіни всередині ряду зліва направо
             row_slots.sort(key=lambda s: s.pos_x or 0)
 
+            prev_w: float = 0.0
+            prev_x: float = 0.0
             for col_idx, slot in enumerate(row_slots):
                 # Кожен плагін у ряду отримує свій X
-                x = cls.BASE_X + col_idx * cls.X_STEP
+                x_offset = prev_x + prev_w
+                x = cls.BASE_X + max(col_idx * cls.X_STEP, x_offset) + cls.X_MIN_SPACING
                 result[slot] = (x, y)
+                prev_x = x
+                prev_w, _ = slot.size
+
+            # Знаходимо найвищий плагін у поточному ряду
+            # s.size[1] — це висота (height)
+            prev_y = y
+            prev_h = max(s.size[1] for s in row_slots) if row_slots else 0
 
         return result
 
@@ -388,8 +409,6 @@ class RoutingManager:
         """Розраховує пари (вихід, вхід) між двома слотами."""
         outputs = src.audio_outputs
         inputs = dst.audio_inputs
-
-        print(src, outputs, dst, inputs)
 
         if not outputs or not inputs:
             return []
@@ -669,7 +688,7 @@ class Orchestrator:
     def _normalize_layout(self, /, force: bool = False):
         if self._loading:
             return
-        
+
         if self._normalizing:
             return
 
@@ -763,7 +782,6 @@ class Orchestrator:
             desired = RoutingManager.calculate_audio_chain_connections(
                 self.slots, self.input_slot, self.output_slot
             )
-            print(desired)
 
             # 2. Обчислюємо різницю з кешем Orchestrator
             to_connect = desired - self._connections
