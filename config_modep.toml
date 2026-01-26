@@ -739,3 +739,8 @@ category = "utility"
 # name = "MIDI Step Sequencer8x8"
 # uri = "http://gareus.org/oss/lv2/stepseq#s8n8"
 # category = "midi"
+
+[[plugins]]
+name = "The Infamous Mindi"
+uri = "http://ssj71.github.io/infamousPlugins/plugs.html#mindi"
+category = "midi"

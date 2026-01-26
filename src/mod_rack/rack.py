@@ -86,6 +86,14 @@ class PluginSlot:
         return [p.graph_path for p in self.plugin.audio_outputs]
 
     @property
+    def midi_inputs(self) -> list[str]:
+        return [p.graph_path for p in self.plugin.midi_inputs]
+
+    @property
+    def midi_outputs(self) -> list[str]:
+        return [p.graph_path for p in self.plugin.midi_outputs]
+
+    @property
     def join_audio_outputs(self) -> bool:
         return self.plugin.join_audio_outputs
 
@@ -126,10 +134,15 @@ class HardwareSlot:
     """Hardware I/O слот (capture/playback)."""
 
     def __init__(
-        self, audio_ports: list[str], direction: PortDirection, config: HardwareConfig
+        self,
+        direction: PortDirection,
+        config: HardwareConfig,
+        audio_ports: list[str] | None = None,
+        midi_ports: list[str] | None = None,
     ):
         # Використовуємо звичайні атрибути, щоб вони були доступні відразу
-        self.audio_ports = audio_ports  # список імен портів
+        self.audio_ports = audio_ports if audio_ports is not None else []
+        self.midi_ports = midi_ports if midi_ports is not None else []
         self.direction = direction
 
         # Налаштування з конфігу
@@ -157,10 +170,16 @@ class HardwareSlot:
         return self.audio_ports if self.direction == PortDirection.INPUT else []
 
     @property
+    def midi_inputs(self) -> list[str]:
+        return [] if self.direction == PortDirection.INPUT else self.midi_ports
+
+    @property
+    def midi_outputs(self) -> list[str]:
+        return self.midi_ports if self.direction == PortDirection.INPUT else []
+
+    @property
     def join_audio_inputs(self) -> bool:
-        return (
-            self.join_audio_ports if self.direction == PortDirection.OUTPUT else False
-        )
+        return False if self.direction == PortDirection.INPUT else self.join_audio_ports
 
     @property
     def join_audio_outputs(self) -> bool:
@@ -403,23 +422,19 @@ class RoutingManager:
     """
 
     @classmethod
-    def get_audio_connection_pairs(
-        cls, src: AnySlot, dst: AnySlot
-    ) -> list[tuple[str, str]]:
-        """Розраховує пари (вихід, вхід) між двома слотами."""
-        outputs = src.audio_outputs
-        inputs = dst.audio_inputs
-
+    def get_connection_pairs(
+        cls,
+        inputs: list[str],
+        outputs: list[str],
+        joid_inputs: bool,
+        joid_outputs: bool,
+    ):
         if not outputs or not inputs:
             return []
 
-        # Визначаємо прапори об'єднання (join)
-        join_audio_outputs = src.join_audio_outputs
-        join_audio_inputs = dst.join_audio_inputs
-
         connections = []
 
-        if join_audio_outputs or join_audio_inputs:
+        if joid_inputs or joid_outputs:
             # All-to-all: кожен вихід з кожним входом
             for out in outputs:
                 for inp in inputs:
@@ -438,7 +453,39 @@ class RoutingManager:
         return connections
 
     @classmethod
-    def calculate_audio_chain_connections(
+    def get_audio_connection_pairs(
+        cls, src: AnySlot, dst: AnySlot
+    ) -> list[tuple[str, str]]:
+        """Розраховує пари (вихід, вхід) між двома слотами."""
+        outputs = src.audio_outputs
+        inputs = dst.audio_inputs
+
+        # Визначаємо прапори об'єднання (join)
+        join_audio_outputs = src.join_audio_outputs
+        join_audio_inputs = dst.join_audio_inputs
+
+        return cls.get_connection_pairs(
+            inputs, outputs, join_audio_inputs, join_audio_outputs
+        )
+
+    @classmethod
+    def get_midi_connection_pairs(
+        cls, src: AnySlot, dst: AnySlot
+    ) -> list[tuple[str, str]]:
+        """Розраховує пари (вихід, вхід) між двома слотами."""
+        outputs = src.midi_outputs
+        inputs = dst.midi_inputs
+        print("MIDI!", inputs, outputs)
+        # Визначаємо прапори об'єднання (join)
+        join_midi_outputs = True  # src.join_midi_outputs
+        join_midi_inputs = True  # dst.join_midi_inputs
+
+        return cls.get_connection_pairs(
+            inputs, outputs, join_midi_inputs, join_midi_outputs
+        )
+
+    @classmethod
+    def calculate_chain_connections(
         cls,
         slots: list[PluginSlot],
         input_slot: HardwareSlot,
@@ -449,8 +496,10 @@ class RoutingManager:
         chain = [input_slot] + slots + [output_slot]
 
         for i in range(len(chain) - 1):
-            pairs = cls.get_audio_connection_pairs(chain[i], chain[i + 1])
-            desired.update(pairs)
+            audio_pairs = cls.get_audio_connection_pairs(chain[i], chain[i + 1])
+            midi_pairs = cls.get_midi_connection_pairs(chain[i], chain[i + 1])
+            desired.update(audio_pairs)
+            desired.update(midi_pairs)
 
         return desired
 
@@ -485,10 +534,10 @@ class Orchestrator:
 
         # Slots and connections cache
         self.input_slot = HardwareSlot(
-            audio_ports=[], direction=PortDirection.INPUT, config=config.hardware
+            direction=PortDirection.INPUT, config=config.hardware
         )
         self.output_slot = HardwareSlot(
-            audio_ports=[], direction=PortDirection.OUTPUT, config=config.hardware
+            direction=PortDirection.OUTPUT, config=config.hardware
         )
         self.slots: list[PluginSlot] = []
         self._connections: set[tuple[str, str]] = set()
@@ -564,27 +613,29 @@ class Orchestrator:
         Handle hardware port added via WebSocket feedback.
         Updates hardware slots.
         """
-        _Color.debug(
-            f"~ HW {event.port_type.name} {event.direction.name}: {event.name}"
-        )
+        _Color.blue(f"+ HW {event.port_type.name} {event.direction.name}: {event.name}")
+
+        if event.port_type not in {PortType.AUDIO, PortType.MIDI}:
+            return
+
+        if event.direction not in {PortDirection.INPUT, PortDirection.OUTPUT}:
+            return
+
+        hw_config = self.config.hardware
+
+        if event.direction == PortDirection.OUTPUT:
+            slot = self.output_slot
+        else:
+            slot = self.input_slot
 
         if event.port_type == PortType.AUDIO:
-            hw_config = self.config.hardware
+            ports_list = slot.audio_ports
+        else:
+            ports_list = slot.midi_ports
 
-            if event.direction == PortDirection.OUTPUT:
-                slot = self.output_slot
-            else:
-                slot = self.input_slot
-
-            if event.name not in hw_config.disable_ports:
-                if event.name not in slot.audio_ports:
-                    slot.audio_ports.append(event.name)
-                    _Color.blue(
-                        f"+ HW {event.port_type.name} {event.direction.name}: {event.name}"
-                    )
-
-        elif event.port_type == PortType.MIDI:
-            _Color.red("Warning: HW MIDI PORTS IS NOT YET SUPPORTED")
+        if event.name not in hw_config.disable_ports:
+            if event.name not in ports_list:
+                ports_list.append(event.name)
 
         self._schedule_reorder()
 
@@ -779,7 +830,7 @@ class Orchestrator:
 
         with self._lock:
             # 1. Отримуємо "ідеальний" стан від менеджера
-            desired = RoutingManager.calculate_audio_chain_connections(
+            desired = RoutingManager.calculate_chain_connections(
                 self.slots, self.input_slot, self.output_slot
             )
 

@@ -33,7 +33,7 @@ from .rack import (
     Rack,
     RoutingManager,
 )
-from .plugin import Plugin, AudioPort
+from .plugin import Plugin, Port
 from .controls import (
     ControlPort,
     ControlProperties,
@@ -94,7 +94,7 @@ __all__ = [
     "OrchestratorMode",
     # Plugin
     "Plugin",
-    "AudioPort",
+    "Port",
     # Controls
     "ControlProperties",
     "ScalePoint",
