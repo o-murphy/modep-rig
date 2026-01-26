@@ -358,6 +358,7 @@ class WsProtocol:
                     return GraphParamSetBypassEvent(label=label, bypassed=f_val > 0.5)
                 return GraphParamSetEvent(label=label, symbol=symbol, value=f_val)
             case [msg_type, *_]:
+                print("UnknownEvent", msg_type, message)
                 return UnknownEvent(msg_type=msg_type, raw_message=message)
         return None
 

@@ -208,7 +208,7 @@ class GridLayoutManager:
         Y_THRESHOLD: Maximum Y difference to consider slots in the same row for sorting.
     """
 
-    X_STEP: float = 1000.0
+    X_STEP: float = 900.0
     Y_STEP: float = 600.0
     BASE_X: float = 200.0
     BASE_Y: float = 200.0
@@ -382,7 +382,9 @@ class RoutingManager:
     """
 
     @classmethod
-    def get_audio_connection_pairs(cls, src: AnySlot, dst: AnySlot) -> list[tuple[str, str]]:
+    def get_audio_connection_pairs(
+        cls, src: AnySlot, dst: AnySlot
+    ) -> list[tuple[str, str]]:
         """Розраховує пари (вихід, вхід) між двома слотами."""
         outputs = src.audio_outputs
         inputs = dst.audio_inputs
@@ -667,25 +669,31 @@ class Orchestrator:
     def _normalize_layout(self, /, force: bool = False):
         if self._loading:
             return
+        
+        if self._normalizing:
+            return
 
         if self.mode != OrchestratorMode.MANAGER and not force:
             return
 
         _Color.info("\u21bb Normalization...")
         new_positions = GridLayoutManager.normalize(self.slots)
+        self._request_update_positions(new_positions)
 
+    def _request_update_positions(
+        self, positions: dict[PluginSlot, tuple[float, float]]
+    ):
         self.normalizing = True
-
         try:
-            for slot, (x, y) in new_positions.items():
+            for slot, (x, y) in positions.items():
                 old_pos = (slot.pos_x, slot.pos_y)
-                _Color.yellow(f"\u21bb Normalizing: {old_pos} -> {(x, y)}")
+                _Color.yellow(f"\u21c5 Updating pos: {old_pos} -> {(x, y)}")
                 if slot.is_pos_changed((x, y)):
                     slot.pos_x = x
                     slot.pos_y = y
                     self.client.effect_position(slot.label, x, y)
         except Exception as err:
-            _Color.red(f"\u21bb Normalizing: error occured: {err}")
+            _Color.red(f"\u21c5 Updating pos: error occured: {err}")
         finally:
             with self._lock:
                 self.normalizing = False
@@ -976,23 +984,10 @@ class Rack(Orchestrator):
 
         _Color.info("\u21c5 Reordering...")
         new_positions = GridLayoutManager.move_slot(self.slots, from_idx, to_idx)
+        self._request_update_positions(new_positions)
 
-        self.normalizing = True
-
-        try:
-            for slot, (x, y) in new_positions.items():
-                old_pos = (slot.pos_x, slot.pos_y)
-                _Color.yellow(f"\u21c5 Reordering: {old_pos} -> {(x, y)}")
-                if slot.is_pos_changed((x, y)):
-                    slot.pos_x = x
-                    slot.pos_y = y
-                    self.client.effect_position(slot.label, x, y)
-        except Exception as err:
-            _Color.red(f"\u21bb Normalizing: error occured: {err}")
-        finally:
-            with self._lock:
-                self.normalizing = False
-            self._schedule_reorder(force_emit=True)
+        # Force reordering schedule
+        self._schedule_reorder()
 
     # =========================================================================
     # Convenience API
