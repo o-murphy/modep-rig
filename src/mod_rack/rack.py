@@ -7,7 +7,7 @@ import secrets
 import string
 import weakref
 
-from mod_rack.config import Config, HardwareConfig, PluginConfig
+from mod_rack.config import Config, HardwareConfig, PluginConfig, RoutingMode
 from mod_rack.client import (
     GraphAddHwPortEvent,
     Client,
@@ -490,6 +490,30 @@ class RoutingManager:
         slots: list[PluginSlot],
         input_slot: HardwareSlot,
         output_slot: HardwareSlot,
+        mode: RoutingMode = RoutingMode.HARD_BYPASS,
+    ) -> set[tuple[str, str]]:
+        match mode:
+            case RoutingMode.HARD_BYPASS:
+                return cls._calculate_hard_bypass_connections(
+                    slots, input_slot, output_slot
+                )
+            case RoutingMode.DUAL_TRACK:
+                return cls._calculate_dual_track_connections(
+                    slots, input_slot, output_slot
+                )
+            case RoutingMode.LINEAR:
+                return cls._calculate_dual_track_connections(
+                    slots, input_slot, output_slot
+                )
+            case _:
+                raise ValueError("Unsupported routing mode")
+
+    @classmethod
+    def _calculate_linear_connections(
+        cls,
+        slots: list[PluginSlot],
+        input_slot: HardwareSlot,
+        output_slot: HardwareSlot,
     ) -> set[tuple[str, str]]:
         """Повертає повний набір бажаних з'єднань для всього ланцюга."""
         desired = set()
@@ -503,6 +527,73 @@ class RoutingManager:
 
         return desired
 
+    @classmethod
+    def _calculate_hard_bypass_connections(
+        cls,
+        slots: list[PluginSlot],
+        input_slot: HardwareSlot,
+        output_slot: HardwareSlot,
+    ) -> set[tuple[str, str]]:
+        """Повертає повний набір з'єднань, прокидаючи сигнал крізь несумісні слоти."""
+        desired = set()
+        chain = [input_slot] + slots + [output_slot]
+
+        for i in range(len(chain)):
+            src = chain[i]
+
+            # --- Робота з AUDIO ---
+            if src.audio_outputs:
+                # Шукаємо наступний слот, у якого є хоча б один audio_input
+                for j in range(i + 1, len(chain)):
+                    dst = chain[j]
+                    if dst.audio_inputs:
+                        audio_pairs = cls.get_audio_connection_pairs(src, dst)
+                        desired.update(audio_pairs)
+                        break  # Знайшли споживача, далі не йдемо
+
+            # --- Робота з MIDI ---
+            if src.midi_outputs:
+                # Шукаємо наступний слот, у якого є хоча б один midi_input
+                for j in range(i + 1, len(chain)):
+                    dst = chain[j]
+                    if dst.midi_inputs:
+                        midi_pairs = cls.get_midi_connection_pairs(src, dst)
+                        desired.update(midi_pairs)
+                        break  # Знайшли споживача, далі не йдемо
+
+        return desired
+
+    @classmethod
+    def _calculate_dual_track_connections(
+        cls,
+        slots: list[PluginSlot],
+        input_slot: HardwareSlot,
+        output_slot: HardwareSlot,
+    ) -> set[tuple[str, str]]:
+        """
+        Режим DUAL_TRACK: Сигнали йдуть паралельними магістралями.
+        Аудіо-ланцюг будується тільки через аудіо-плагіни.
+        Міді-ланцюг будується тільки через міді-плагіни.
+        """
+        desired = set()
+        full_chain = [input_slot] + slots + [output_slot]
+
+        # 1. Формуємо аудіо-магістраль
+        audio_nodes = [s for s in full_chain if s.audio_inputs or s.audio_outputs]
+        for i in range(len(audio_nodes) - 1):
+            src, dst = audio_nodes[i], audio_nodes[i+1]
+            # З'єднуємо, якщо є що і куди з'єднувати
+            if src.audio_outputs and dst.audio_inputs:
+                desired.update(cls.get_audio_connection_pairs(src, dst))
+
+        # 2. Формуємо міді-магістраль
+        midi_nodes = [s for s in full_chain if s.midi_inputs or s.midi_outputs]
+        for i in range(len(midi_nodes) - 1):
+            src, dst = midi_nodes[i], midi_nodes[i+1]
+            if src.midi_outputs and dst.midi_inputs:
+                desired.update(cls.get_midi_connection_pairs(src, dst))
+
+        return desired
 
 # =============================================================================
 # Orchestrator
@@ -831,7 +922,7 @@ class Orchestrator:
         with self._lock:
             # 1. Отримуємо "ідеальний" стан від менеджера
             desired = RoutingManager.calculate_chain_connections(
-                self.slots, self.input_slot, self.output_slot
+                self.slots, self.input_slot, self.output_slot, self.config.rack.routing_mode
             )
 
             # 2. Обчислюємо різницю з кешем Orchestrator

@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 
 try:
@@ -11,6 +12,7 @@ __all__ = [
     "PluginConfig",
     "HardwareConfig",
     "ServerConfig",
+    "RoutingMode",
     "RackConfig",
     "Config",
 ]
@@ -44,10 +46,17 @@ class ServerConfig:
     url: str = "http://127.0.0.1:18181"
 
 
+class RoutingMode(Enum):
+    LINEAR = "linear"  # Суворий 1->2->3 (з ризиком розривів)
+     # Кожен вихід шукає найближчий наступний вхід (паралелізм)
+    HARD_BYPASS = "hard_bypass"
+    DUAL_TRACK = "dual_track"  # Незалежні аудіо та міді ланцюги (твій новий режим)
+
+
 @dataclass
 class RackConfig:
     # Maximum number of slots allowed (None = unlimited)
-    slots_limit: int | None = None
+    routing_mode: RoutingMode = RoutingMode.HARD_BYPASS
 
 
 @dataclass
@@ -76,11 +85,13 @@ class Config:
             join_audio_inputs=hw_data.get("join_audio_inputs", False),
             join_audio_outputs=hw_data.get("join_audio_outputs", False),
         )
+
         rack_data = data.get("rack", {})
-        rack = RackConfig(
-            slots_limit=rack_data.get("slots_limit")
-            or rack_data.get("slot_count"),  # backward compat
-        )
+        try:
+            routing_mode = RoutingMode(rack_data.get("routing_mode"))
+        except ValueError:
+            routing_mode = RoutingMode.HARD_BYPASS
+        rack = RackConfig(routing_mode=routing_mode)
 
         plugins = []
         for p in data.get("plugins", []):

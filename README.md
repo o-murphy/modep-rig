@@ -56,7 +56,8 @@ url = "http://127.0.0.1:18181/"
 # outputs = ["playback_1", "playback_2"] # Hardware outputs (to audio interface)
 
 [rack]
-slots_limit = 8             # Max slots allowed (optional, default: unlimited)
+routing_mode = "hard_bypass"
+
 
 # Supported plugins (whitelist)
 [[plugins]]
