@@ -1,4 +1,5 @@
 from enum import Enum, auto
+import io
 import threading
 import time
 from typing import Any, Callable, SupportsIndex, TypeAlias
@@ -613,6 +614,9 @@ class Orchestrator:
         self.config = config
         self.client = Client(config.server.url)
 
+        # TODO: fetch config from server
+        # self._fetch_config()
+
         # Locks and flags
         self._lock = threading.RLock()
         self._reorder_timer: threading.Timer | None = None
@@ -634,6 +638,10 @@ class Orchestrator:
         self._connections: set[tuple[str, str]] = set()
 
         self._subscribe()
+
+    def _fetch_config(self):
+        data = self.client.download_file("rack/config.toml")
+        Config.parse(data.decode())
 
     @property
     def normalizing(self):

@@ -48,7 +48,7 @@ class ServerConfig:
 
 class RoutingMode(Enum):
     LINEAR = "linear"  # Суворий 1->2->3 (з ризиком розривів)
-     # Кожен вихід шукає найближчий наступний вхід (паралелізм)
+    # Кожен вихід шукає найближчий наступний вхід (паралелізм)
     HARD_BYPASS = "hard_bypass"
     DUAL_TRACK = "dual_track"  # Незалежні аудіо та міді ланцюги (твій новий режим)
 
@@ -75,8 +75,14 @@ class Config:
             print(f"Config file {path} not found, using defaults")
             return cls()
 
-        with open(path, "rb") as f:
-            data = tomllib.load(f)
+        with open(path, "r") as fp:
+            data = fp.read()
+
+        return cls.parse(data)
+
+    @classmethod
+    def parse(cls, data):
+        data = tomllib.loads(data)
 
         server = ServerConfig(**data.get("server", {}))
         hw_data = data.get("hardware", {})

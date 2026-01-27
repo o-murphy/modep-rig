@@ -954,3 +954,14 @@ class Client:
     def system_prefs(self):
         """Отримати системні налаштування"""
         return self._get("/system/prefs")
+
+    # =========================================================================
+    # Files
+    # =========================================================================
+    def download_file(self, filepath: str):
+        scheme, url, *_ = self.base_url.split(":")
+        resp = requests.get(
+            f"{scheme}:{url}:8081" + f"/download/file/{filepath}",
+            headers=HEADERS,
+        )
+        return resp.content
