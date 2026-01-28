@@ -1,5 +1,5 @@
 """
-PySide6 UI for MODEP Rack control.
+PySide6 UI for MOD Rack control.
 
 Run with: python qrack.py
 """
@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal, QTimer
 
-from mod_rack import Config, Rack, ControlPort
+from mod_rack import Config, Rack, ControlPort, DEFAULT_SERVER_URL
 from mod_rack.rack import OrchestratorMode
 
 
@@ -566,7 +566,7 @@ class MainWindow(QMainWindow):
         self.rack.client.ws.on(GraphParamSetEvent, self._forward_param_event)
         self.rack.client.ws.on(GraphParamSetBypassEvent, self._forward_bypass_event)
 
-        self.setWindowTitle("MODEP Rack Controller")
+        self.setWindowTitle("MOD Rack Controller")
         self.setMinimumSize(800, 600)
 
         # Central widget
@@ -760,13 +760,12 @@ class MainWindow(QMainWindow):
 
 
 def main():
-    # Load config
-
-    # Override server URL if needed
     import argparse
 
-    parser = argparse.ArgumentParser(description="MODEP Rack Controller")
-    parser.add_argument("--server", "-s", default=None, help="MOD server URL")
+    parser = argparse.ArgumentParser(description="MOD Rack Controller")
+    parser.add_argument(
+        "--server", "-s", default=DEFAULT_SERVER_URL, help="MOD server URL"
+    )
     parser.add_argument(
         "--config", "-c", help="Config", type=Path, default="config.toml"
     )
@@ -775,13 +774,12 @@ def main():
 
     config = Config.load(args.config)
 
-    if args.server:
-        config.server.url = args.server
-
     # Create rack (do not force reset on init — build state from WebSocket)
-    print("Connecting to MOD server...")
+    print(f"Connecting to MOD server at {args.server}...")
     rack = Rack(
-        config, OrchestratorMode.OBSERVER if args.slave else OrchestratorMode.MANAGER
+        args.server,
+        config,
+        OrchestratorMode.OBSERVER if args.slave else OrchestratorMode.MANAGER,
     )
 
     # Create and run app

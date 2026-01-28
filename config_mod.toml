@@ -49,6 +49,10 @@ category = "distortion"
 
 # --- Delay (original) ---
 
+[[plugins]]
+name = "Bollie Delay"
+uri = "https://ca9.eu/lv2/bolliedelay"
+category = "delay"
 
 # =============================================================================
 # Plugins (from server)
