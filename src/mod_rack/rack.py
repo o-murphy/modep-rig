@@ -475,7 +475,6 @@ class RoutingManager:
         """Розраховує пари (вихід, вхід) між двома слотами."""
         outputs = src.midi_outputs
         inputs = dst.midi_inputs
-        print("MIDI!", inputs, outputs)
         # Визначаємо прапори об'єднання (join)
         join_midi_outputs = True  # src.join_midi_outputs
         join_midi_inputs = True  # dst.join_midi_inputs
