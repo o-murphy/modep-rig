@@ -46,22 +46,29 @@ class ControlWidget(QWidget):
 
     value_changed = Signal(str, float)  # symbol, value
 
+    # Ignore incoming WS updates for this duration after a local change
+    LOCAL_CHANGE_COOLDOWN_MS = 100
+
     def __init__(self, control: ControlPort, parent=None):
         super().__init__(parent)
         self.control = control
+        self._local_change_timer = QTimer(self)
+        self._local_change_timer.setSingleShot(True)
 
     def set_value_silent(self, value: float):
-        """Set value without emitting signal."""
-        self.blockSignals(True)
+        """Set value from server without emitting signal.
+        Ignored while user is actively interacting (cooldown)."""
+        if self._local_change_timer.isActive():
+            return
         self._set_widget_value(value)
-        self.blockSignals(False)
 
     def _set_widget_value(self, value: float):
         """Override in subclass."""
         pass
 
     def _emit_change(self, value: float):
-        """Emit value change if not updating."""
+        """Emit value change and start cooldown to ignore WS echo."""
+        self._local_change_timer.start(self.LOCAL_CHANGE_COOLDOWN_MS)
         self.value_changed.emit(self.control.symbol, value)
 
 
@@ -112,7 +119,9 @@ class KnobControl(ControlWidget):
         self._emit_change(value)
 
     def _set_widget_value(self, value: float):
+        self.dial.blockSignals(True)
         self.dial.setValue(self._value_to_slider(value))
+        self.dial.blockSignals(False)
         self.value_label.setText(self.control.format_value(value))
 
 
@@ -136,7 +145,9 @@ class ToggleControl(ControlWidget):
         self._emit_change(value)
 
     def _set_widget_value(self, value: float):
+        self.checkbox.blockSignals(True)
         self.checkbox.setChecked(value >= 0.5)
+        self.checkbox.blockSignals(False)
 
 
 class EnumControl(ControlWidget):
@@ -180,7 +191,9 @@ class EnumControl(ControlWidget):
     def _set_widget_value(self, value: float):
         idx = self._value_to_index(value)
         if idx >= 0:
+            self.combo.blockSignals(True)
             self.combo.setCurrentIndex(idx)
+            self.combo.blockSignals(False)
 
 
 class IntegerControl(ControlWidget):
@@ -215,7 +228,9 @@ class IntegerControl(ControlWidget):
         self._emit_change(float(value))
 
     def _set_widget_value(self, value: float):
+        self.slider.blockSignals(True)
         self.slider.setValue(int(value))
+        self.slider.blockSignals(False)
         self.value_label.setText(self.control.format_value(value))
 
 
@@ -535,17 +550,21 @@ class MainWindow(QMainWindow):
     """Main application window."""
 
     order_changed_signal = Signal(list)
+    _param_changed_signal = Signal(str, str, float)  # label, symbol, value
+    _bypass_changed_signal = Signal(str, bool)  # label, bypassed
 
     def __init__(self, rack: Rack):
         super().__init__()
         self.rack = rack
         self.selected_label: str | None = None
 
-        # Connect rack callbacks to emit signals
+        # Connect rack callbacks to emit signals (WS thread → main thread)
         self.order_changed_signal.connect(self._rebuild_slot_widgets)
+        self._param_changed_signal.connect(self._on_ws_param_changed)
+        self._bypass_changed_signal.connect(self._on_ws_bypass_changed)
         self.rack.on_rack_order_changed(self._handle_rack_cb)
-        self.rack.client.ws.on(GraphParamSetBypassEvent, self._on_ws_bypass_changed)
-        self.rack.client.ws.on(GraphParamSetEvent, self._on_ws_param_changed)
+        self.rack.client.ws.on(GraphParamSetEvent, self._forward_param_event)
+        self.rack.client.ws.on(GraphParamSetBypassEvent, self._forward_bypass_event)
 
         self.setWindowTitle("MODEP Rack Controller")
         self.setMinimumSize(800, 600)
@@ -707,20 +726,27 @@ class MainWindow(QMainWindow):
     # WebSocket event handlers (thread-safe via Qt signals)
     # =========================================================================
 
-    def _on_ws_param_changed(self, event: GraphParamSetEvent):
-        """Handle parameter change from WebSocket - update UI."""
-        # If this is the selected slot, update control widget
-        if (
-            event.label == self.selected_label
-            and event.symbol in self.controls_panel.control_widgets
-        ):
-            widget = self.controls_panel.control_widgets[event.symbol]
-            widget.set_value_silent(event.value)
+    def _forward_param_event(self, event: GraphParamSetEvent):
+        """Forward WS event to main thread via signal."""
+        self._param_changed_signal.emit(event.label, event.symbol, event.value)
 
-    def _on_ws_bypass_changed(self, event: GraphParamSetBypassEvent):
-        """Handle bypass change from WebSocket - update UI."""
-        if event.label == self.selected_label:
-            self.controls_panel.set_bypass_silent(event.bypassed)
+    def _forward_bypass_event(self, event: GraphParamSetBypassEvent):
+        """Forward WS event to main thread via signal."""
+        self._bypass_changed_signal.emit(event.label, event.bypassed)
+
+    def _on_ws_param_changed(self, label: str, symbol: str, value: float):
+        """Handle parameter change in main thread."""
+        if (
+            label == self.selected_label
+            and symbol in self.controls_panel.control_widgets
+        ):
+            widget = self.controls_panel.control_widgets[symbol]
+            widget.set_value_silent(value)
+
+    def _on_ws_bypass_changed(self, label: str, bypassed: bool):
+        """Handle bypass change in main thread."""
+        if label == self.selected_label:
+            self.controls_panel.set_bypass_silent(bypassed)
 
     def _on_rack_order_changed(self, order: list):
         """Handle order change from WebSocket - rebuild UI."""
