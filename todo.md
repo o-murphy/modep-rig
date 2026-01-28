@@ -2,7 +2,6 @@
 
 ## Future
 
-- [ ] MIDI routing
 - [ ] Output parameters
 - [ ] Replace plugin with position preservation
 
@@ -24,3 +23,4 @@
 - [x] WebSocket callbacks for params/bypass
 - [x] Smart channel routing (mono/stereo conversion)
 - [x] Plugin whitelist with port override
+- [x] MIDI routing (ports, routing modes: linear, hard_bypass, dual_track)
