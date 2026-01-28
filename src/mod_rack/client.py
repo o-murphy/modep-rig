@@ -1,6 +1,8 @@
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
+import socket
+import ssl
 import struct
 import time
 import threading
@@ -368,6 +370,11 @@ class WsProtocol:
 
 
 class WsConnection:
+    # Помилки після яких реконнект не має сенсу
+    NON_RECOVERABLE_ERRORS = (
+        OSError,  # Includes socket.gaierror (DNS), SSL errors
+    )
+
     def __init__(
         self,
         ws_url: str,
@@ -376,6 +383,7 @@ class WsConnection:
         on_error: Callable[[Exception], None] | None = None,
         on_close: Callable[[], None] | None = None,
         reconnect_delay: float = 2.0,
+        max_reconnect_delay: float = 30.0,
         auto_reconnect: bool = True,
     ):
         self.ws_url = ws_url
@@ -384,13 +392,17 @@ class WsConnection:
         self._on_error = on_error
         self._on_close = on_close
 
-        self._reconnect_delay = reconnect_delay
+        self._base_reconnect_delay = reconnect_delay
+        self._max_reconnect_delay = max_reconnect_delay
+        self._current_delay = reconnect_delay
         self._auto_reconnect = auto_reconnect
 
         self._ws: websocket.WebSocketApp | None = None
         self._thread: threading.Thread | None = None
         self._should_run = False
         self._connected = threading.Event()
+        self._last_error: Exception | None = None
+        self._should_reconnect = True
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -413,7 +425,11 @@ class WsConnection:
             self._ws.close()
 
     def send(self, message: str) -> bool:
-        """Send raw message over WebSocket."""
+        """Send raw message over WebSocket.
+
+        Returns False if not connected or send failed.
+        Does NOT trigger on_error - send failures are not connection errors.
+        """
         if not self.connected:
             return False
         try:
@@ -421,9 +437,7 @@ class WsConnection:
                 self._ws.send(message)
             print(f"WS >> {message}")
             return True
-        except Exception as e:
-            if self._on_error:
-                self._on_error(e)
+        except Exception:
             return False
 
     @property
@@ -436,6 +450,9 @@ class WsConnection:
 
     def _run_loop(self):
         while self._should_run:
+            self._last_error = None
+            self._should_reconnect = True
+
             self._ws = websocket.WebSocketApp(
                 self.ws_url,
                 on_open=self._handle_open,
@@ -452,7 +469,16 @@ class WsConnection:
             if not self._should_run or not self._auto_reconnect:
                 break
 
-            time.sleep(self._reconnect_delay)
+            # Не реконнектимось якщо помилка non-recoverable
+            if not self._should_reconnect:
+                print("WS: Non-recoverable error, stopping reconnect attempts")
+                break
+
+            # Exponential backoff
+            time.sleep(self._current_delay)
+            self._current_delay = min(
+                self._current_delay * 2, self._max_reconnect_delay
+            )
 
     # ------------------------------------------------------------------ #
     # WebSocket callbacks
@@ -460,6 +486,8 @@ class WsConnection:
 
     def _handle_open(self, ws):
         self._connected.set()
+        # Reset backoff on successful connection
+        self._current_delay = self._base_reconnect_delay
         if self._on_open:
             self._on_open()
 
@@ -468,6 +496,9 @@ class WsConnection:
             self._on_message(message)
 
     def _handle_error(self, ws, error):
+        self._last_error = error
+        self._should_reconnect = self._is_recoverable(error)
+
         if self._on_error:
             self._on_error(error)
 
@@ -475,6 +506,32 @@ class WsConnection:
         self._connected.clear()
         if self._on_close:
             self._on_close()
+
+    def _is_recoverable(self, error: Exception) -> bool:
+        """Визначає чи варто реконнектитись після цієї помилки."""
+        # DNS помилки, SSL помилки - не варто
+        if isinstance(error, self.NON_RECOVERABLE_ERRORS):
+            # Але ConnectionRefusedError (підклас OSError) - recoverable
+            if isinstance(error, ConnectionRefusedError):
+                return True
+            # gaierror (DNS) - non-recoverable
+            if isinstance(error, socket.gaierror):
+                return False
+            # SSL errors - non-recoverable
+            if isinstance(error, ssl.SSLError):
+                return False
+            # Інші OSError (network unreachable, etc) - recoverable
+            return True
+
+        # WebSocket specific errors
+        if hasattr(websocket, 'WebSocketBadStatusException'):
+            if isinstance(error, websocket.WebSocketBadStatusException):
+                # 401, 403, 404 - non-recoverable
+                if hasattr(error, 'status_code') and error.status_code in (401, 403, 404):
+                    return False
+
+        # За замовчуванням - recoverable
+        return True
 
 
 class StateSnapshot:
