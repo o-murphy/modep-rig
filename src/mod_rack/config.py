@@ -51,6 +51,7 @@ class RoutingMode(Enum):
 class RackConfig:
     # Maximum number of slots allowed (None = unlimited)
     routing_mode: RoutingMode = RoutingMode.HARD_BYPASS
+    allow_all_plugins: bool = False
 
 
 @dataclass
@@ -86,10 +87,15 @@ class Config:
 
         rack_data = parsed.get("rack", {})
         try:
-            routing_mode = RoutingMode(rack_data.get("routing_mode"))
+            routing_mode = RoutingMode(
+                rack_data.get("routing_mode", RoutingMode.HARD_BYPASS)
+            )
         except ValueError:
             routing_mode = RoutingMode.HARD_BYPASS
-        rack = RackConfig(routing_mode=routing_mode)
+        rack = RackConfig(
+            routing_mode=routing_mode,
+            allow_all_plugins=rack_data.get("routing_mode", False),
+        )
 
         plugins = []
         for p in parsed.get("plugins", []):

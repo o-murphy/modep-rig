@@ -13,7 +13,7 @@ url = "http://192.168.88.247:80/"
 
 [rack]
 routing_mode = "hard_bypass"  # one of [hard_bypass, linear, dual_track], default=hard_bypass
-
+allow_all_plugins = true
 
 # =============================================================================
 # Plugins

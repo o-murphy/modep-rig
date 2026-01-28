@@ -41,14 +41,14 @@ class Plugin:
     """
 
     def __init__(
-        self, client: Client, uri: str, label: str, config: PluginConfig | None
+        self, client: Client, uri: str, label: str, config: PluginConfig | None = None
     ):
         self.client = client
         self.uri = uri
         self.label = label
 
         self._bypassed = False
-        self._config = config
+        self._config = config if config is not None else PluginConfig(self.label, self.uri)
         self._controls: dict[str, ControlPort] = {}
 
         # io setup

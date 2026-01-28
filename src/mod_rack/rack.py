@@ -812,12 +812,19 @@ class Orchestrator:
         slot = self.get_slot_by_label(event.label)
         if not slot:
             # Just update position
-            plugin = Plugin.load_supported(
-                self.client,
-                uri=event.uri,
-                label=event.label,
-                config=self.config,
-            )
+            if self.config.rack.allow_all_plugins:
+                plugin = Plugin(
+                    self.client,
+                    uri=event.uri,
+                    label=event.label,
+                )
+            else:
+                plugin = Plugin.load_supported(
+                    self.client,
+                    uri=event.uri,
+                    label=event.label,
+                    config=self.config,
+                )
 
             if not plugin:
                 _Color.red(f"Can not load plugin: {event.label}, {event.uri}")
