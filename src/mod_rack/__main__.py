@@ -28,7 +28,7 @@ def main():
         print(f"Error: {target_script.name} not found in {base_path}")
         sys.exit(1)
 
-    print(f"--- Starting MODEP Rack in {mode_name} mode ---")
+    print(f"--- Starting MOD Rack in {mode_name} mode ---")
 
     # Формуємо команду для запуску
     # Використовуємо sys.executable, щоб гарантувати використання того ж віртуального середовища

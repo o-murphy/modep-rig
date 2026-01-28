@@ -172,7 +172,6 @@ class Plugin:
             f"Parsed midi ports: inputs={self.midi_inputs}, outputs={self.midi_outputs}"
         )
 
-
     def _load_controls(self) -> None:
         """Load control metadata from effect_get response."""
         controls = parse_control_ports(self._effect_data)

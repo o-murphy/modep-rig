@@ -48,6 +48,9 @@ __all__ = [
     "UnknownEvent",
 ]
 
+DEFAULT_SERVER_URL = "http://127.0.0.1:18181"
+
+
 HEADERS = {
     "Accept": "application/json, text/plain, */*",
     "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0",
@@ -519,7 +522,8 @@ class StateSnapshot:
 # WsClient
 # -----------------------------
 class WsClient:
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str | None = DEFAULT_SERVER_URL):
+        base_url = base_url or DEFAULT_SERVER_URL
         parsed = urlparse(base_url)
         is_secure = parsed.scheme == "https"
         scheme = "wss" if is_secure else "ws"
@@ -649,24 +653,16 @@ class WsClient:
 # Client
 # -----------------------------
 class Client:
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str | None = DEFAULT_SERVER_URL):
         """
         Client for MOD server.
 
         Args:
-            base_url: Server base URL
-            connect: If True (default) the WebSocket client is started immediately.
-                     If False, the caller should call `client.ws.connect()` after
-                     installing callbacks to avoid missing early WS messages.
+            base_url: Server base URL (default: http://127.0.0.1:18181)
         """
-        self.base_url = base_url
+        self.base_url = base_url or DEFAULT_SERVER_URL
         self.version = self._get_version()
-
-        self.plugins_list: list[dict] = []
-        self._load_effects_list()
-
         self.ws = WsClient(self.base_url)
-        # self.ws.connect()
 
     def _get_version(self) -> str:
         try:
@@ -679,10 +675,6 @@ class Client:
         except Exception as e:
             print(f"Warning: Could not resolve version: {e}")
         return "0.0.0"
-
-    def _load_effects_list(self):
-        data = self._get("/effect/list")
-        self.plugins_list = data if isinstance(data, list) else []
 
     def _get(self, path: str, **kwargs):
         url = self.base_url + path
@@ -741,18 +733,10 @@ class Client:
     # Effects API
     # =========================================================================
 
-    def effect_list(self):
+    def effect_list(self) -> list[dict]:
         """Отримати список всіх доступних ефектів"""
         data = self._get("/effect/list")
-        self.plugins_list = data if isinstance(data, list) else []
-        return self.plugins_list
-
-    def lookup_effect(self, uri: str) -> dict | None:
-        """Знайти ефект за URI в кешованому списку"""
-        for effect in self.plugins_list:
-            if effect.get("uri") == uri:
-                return effect
-        return None
+        return data if isinstance(data, list) else []
 
     def effect_get(self, uri: str):
         """Отримати детальну інформацію про ефект"""
@@ -956,9 +940,10 @@ class Client:
         return self._get("/system/prefs")
 
     # =========================================================================
-    # Files
+    # Files (MODEP only — standard MOD-UI doesn't have file manager on port 8081)
     # =========================================================================
     def download_file(self, filepath: str):
+        """Download file from MODEP file manager (port 8081)."""
         scheme, url, *_ = self.base_url.split(":")
         resp = requests.get(
             f"{scheme}:{url}:8081" + f"/download/file/{filepath}",

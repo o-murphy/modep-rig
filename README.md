@@ -150,7 +150,7 @@ This is useful for:
 from mod_rack import Config, Orchestrator
 
 config = Config.load("config.toml")
-orch = Orchestrator(config)
+orch = Orchestrator("http://127.0.0.1:18181", config)
 
 # Request to add plugin (async - waits for WS feedback)
 label = orch.request_add_plugin("http://moddevices.com/plugins/mod-devel/DS1")
@@ -170,6 +170,11 @@ orch.move_slot(from_idx=0, to_idx=2)
 
 # Clear all plugins
 orch.clear()
+
+# Access installed plugins (cached from server)
+installed = orch.list_installed_plugins()
+plugin_info = orch.lookup_installed("http://moddevices.com/plugins/mod-devel/DS1")
+orch.refresh_installed_plugins()  # refresh cache
 ```
 
 ## API
@@ -185,11 +190,15 @@ orch.clear()
 
 ### Orchestrator
 
+- `Orchestrator(server_url, config=None)` - Create orchestrator with server URL and optional config
 - `orch.request_add_plugin(uri)` - Request to add plugin (returns label or None)
 - `orch.request_remove_plugin(label)` - Request to remove plugin (returns bool)
 - `orch.move_slot(from_idx, to_idx)` - Reorder slots in chain
 - `orch.get_slot_by_label(label)` - Find slot by label
 - `orch.clear()` - Request removal of all plugins
+- `orch.list_installed_plugins()` - List plugins installed on server (cached)
+- `orch.lookup_installed(uri)` - Find installed plugin by URI in cache
+- `orch.refresh_installed_plugins()` - Refresh installed plugins cache
 
 ### PluginSlot
 

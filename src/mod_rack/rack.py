@@ -1,5 +1,4 @@
 from enum import Enum, auto
-import io
 import threading
 import time
 from typing import Any, Callable, SupportsIndex, TypeAlias
@@ -582,7 +581,7 @@ class RoutingManager:
         # 1. Формуємо аудіо-магістраль
         audio_nodes = [s for s in full_chain if s.audio_inputs or s.audio_outputs]
         for i in range(len(audio_nodes) - 1):
-            src, dst = audio_nodes[i], audio_nodes[i+1]
+            src, dst = audio_nodes[i], audio_nodes[i + 1]
             # З'єднуємо, якщо є що і куди з'єднувати
             if src.audio_outputs and dst.audio_inputs:
                 desired.update(cls.get_audio_connection_pairs(src, dst))
@@ -590,11 +589,12 @@ class RoutingManager:
         # 2. Формуємо міді-магістраль
         midi_nodes = [s for s in full_chain if s.midi_inputs or s.midi_outputs]
         for i in range(len(midi_nodes) - 1):
-            src, dst = midi_nodes[i], midi_nodes[i+1]
+            src, dst = midi_nodes[i], midi_nodes[i + 1]
             if src.midi_outputs and dst.midi_inputs:
                 desired.update(cls.get_midi_connection_pairs(src, dst))
 
         return desired
+
 
 # =============================================================================
 # Orchestrator
@@ -608,14 +608,38 @@ class OrchestratorMode(Enum):
 
 class Orchestrator:
     def __init__(
-        self, config: Config, mode: OrchestratorMode = OrchestratorMode.MANAGER
+        self,
+        server_url: str | None = None,
+        config: Config | None = None,
+        mode: OrchestratorMode = OrchestratorMode.MANAGER,
     ):
         self.mode = mode
-        self.config = config
-        self.client = Client(config.server.url)
+        self.client = Client(server_url)
 
-        # TODO: fetch config from server
-        # self._fetch_config()
+        # Try to fetch config from server if not provided or empty
+        if config is None or not config.plugins:
+            fetched = self._fetch_config()
+            if fetched:
+                config = (
+                    fetched
+                    if config is None
+                    else Config(
+                        hardware=config.hardware,
+                        rack=config.rack,
+                        plugins=fetched.plugins,
+                    )
+                )
+
+        # Fail if no plugins configured
+        if config is None or not config.plugins:
+            raise ValueError(
+                "No plugins configured. Provide a config file with [[plugins]] "
+                "or ensure MODEP file server is available at port 8081."
+            )
+        self.config = config
+
+        # Installed plugins cache (from server)
+        self.installed_plugins: list[dict] = self.client.effect_list()
 
         # Locks and flags
         self._lock = threading.RLock()
@@ -629,19 +653,43 @@ class Orchestrator:
 
         # Slots and connections cache
         self.input_slot = HardwareSlot(
-            direction=PortDirection.INPUT, config=config.hardware
+            direction=PortDirection.INPUT, config=self.config.hardware
         )
         self.output_slot = HardwareSlot(
-            direction=PortDirection.OUTPUT, config=config.hardware
+            direction=PortDirection.OUTPUT, config=self.config.hardware
         )
         self.slots: list[PluginSlot] = []
         self._connections: set[tuple[str, str]] = set()
 
         self._subscribe()
 
-    def _fetch_config(self):
-        data = self.client.download_file("rack/config.toml")
-        Config.parse(data.decode())
+    def _fetch_config(self) -> Config | None:
+        """Try to fetch config from MODEP file server (port 8081).
+
+        Note: Only works with MODEP, not standard MOD-UI.
+        """
+        try:
+            data = self.client.download_file("rack/config.toml")
+            return Config.parse(data.decode())
+        except Exception as e:
+            print(f"Could not fetch config from server: {e}")
+            return None
+
+    def refresh_installed_plugins(self) -> list[dict]:
+        """Refresh the installed plugins cache from server."""
+        self.installed_plugins = self.client.effect_list()
+        return self.installed_plugins
+
+    def lookup_installed(self, uri: str) -> dict | None:
+        """Find an installed plugin by URI in cache."""
+        for plugin in self.installed_plugins:
+            if plugin.get("uri") == uri:
+                return plugin
+        return None
+
+    def list_installed_plugins(self) -> list[dict]:
+        """Return cached list of installed plugins."""
+        return self.installed_plugins
 
     @property
     def normalizing(self):
@@ -739,7 +787,18 @@ class Orchestrator:
         self._schedule_reorder()
 
     def _on_graph_hw_port_remove(self, event: GraphRemoveHwPortEvent):
-        # TODO: handle this event
+        """Handle hardware port removal via WebSocket feedback."""
+        _Color.red(f"- HW port: {event.name}")
+
+        # Event only has name, no type/direction — search in both slots and both lists
+        for slot in (self.input_slot, self.output_slot):
+            if event.name in slot.audio_ports:
+                slot.audio_ports.remove(event.name)
+                break
+            if event.name in slot.midi_ports:
+                slot.midi_ports.remove(event.name)
+                break
+
         self._schedule_reorder()
 
     def _on_graph_plugin_add(self, event: GraphPluginAddEvent):
@@ -930,7 +989,10 @@ class Orchestrator:
         with self._lock:
             # 1. Отримуємо "ідеальний" стан від менеджера
             desired = RoutingManager.calculate_chain_connections(
-                self.slots, self.input_slot, self.output_slot, self.config.rack.routing_mode
+                self.slots,
+                self.input_slot,
+                self.output_slot,
+                self.config.rack.routing_mode,
             )
 
             # 2. Обчислюємо різницю з кешем Orchestrator
@@ -1017,9 +1079,12 @@ class Rack(Orchestrator):
     """
 
     def __init__(
-        self, config: Config, mode: OrchestratorMode = OrchestratorMode.MANAGER
+        self,
+        server_url: str | None = None,
+        config: Config | None = None,
+        mode: OrchestratorMode = OrchestratorMode.MANAGER,
     ):
-        super().__init__(config=config, mode=mode)
+        super().__init__(server_url=server_url, config=config, mode=mode)
 
     # =========================================================================
     # Request API (ініціювання без локальних змін)

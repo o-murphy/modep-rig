@@ -1,5 +1,6 @@
-from .config import Config, HardwareConfig, PluginConfig, RackConfig, ServerConfig
+from .config import Config, HardwareConfig, PluginConfig, RackConfig
 from .client import (
+    DEFAULT_SERVER_URL,
     Client,
     WsClient,
     WsConnection,
@@ -46,10 +47,10 @@ __all__ = [
     # Config
     "PluginConfig",
     "HardwareConfig",
-    "ServerConfig",
     "RackConfig",
     "Config",
     # Client
+    "DEFAULT_SERVER_URL",
     "Client",
     "WsConnection",
     "WsProtocol",

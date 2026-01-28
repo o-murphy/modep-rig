@@ -11,7 +11,6 @@ except ImportError:
 __all__ = [
     "PluginConfig",
     "HardwareConfig",
-    "ServerConfig",
     "RoutingMode",
     "RackConfig",
     "Config",
@@ -41,11 +40,6 @@ class HardwareConfig:
     join_audio_outputs: bool = False  # Join last plugin outputs to all hardware outputs
 
 
-@dataclass
-class ServerConfig:
-    url: str = "http://127.0.0.1:18181"
-
-
 class RoutingMode(Enum):
     LINEAR = "linear"  # Суворий 1->2->3 (з ризиком розривів)
     # Кожен вихід шукає найближчий наступний вхід (паралелізм)
@@ -61,7 +55,6 @@ class RackConfig:
 
 @dataclass
 class Config:
-    server: ServerConfig = field(default_factory=ServerConfig)
     hardware: HardwareConfig = field(default_factory=HardwareConfig)
     rack: RackConfig = field(default_factory=RackConfig)
     plugins: list[PluginConfig] = field(default_factory=list)
@@ -81,18 +74,17 @@ class Config:
         return cls.parse(data)
 
     @classmethod
-    def parse(cls, data):
-        data = tomllib.loads(data)
+    def parse(cls, data: str) -> "Config":
+        parsed = tomllib.loads(data)
 
-        server = ServerConfig(**data.get("server", {}))
-        hw_data = data.get("hardware", {})
+        hw_data = parsed.get("hardware", {})
         hardware = HardwareConfig(
-            disable_ports=hw_data.get("disable_ports", []),  # None = auto-detect
+            disable_ports=hw_data.get("disable_ports", []),
             join_audio_inputs=hw_data.get("join_audio_inputs", False),
             join_audio_outputs=hw_data.get("join_audio_outputs", False),
         )
 
-        rack_data = data.get("rack", {})
+        rack_data = parsed.get("rack", {})
         try:
             routing_mode = RoutingMode(rack_data.get("routing_mode"))
         except ValueError:
@@ -100,7 +92,7 @@ class Config:
         rack = RackConfig(routing_mode=routing_mode)
 
         plugins = []
-        for p in data.get("plugins", []):
+        for p in parsed.get("plugins", []):
             plugins.append(
                 PluginConfig(
                     name=p["name"],
@@ -114,7 +106,6 @@ class Config:
             )
 
         return cls(
-            server=server,
             hardware=hardware,
             rack=rack,
             plugins=plugins,
